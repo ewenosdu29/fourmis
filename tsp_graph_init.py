@@ -191,6 +191,39 @@ class Graph:
         for a, b in zip(ordre[:-1], ordre[1:]):
             dist += self.matrice_od[a, b]
         return float(dist)
+    
+    def route_heuristique(self, methode: str = "ppv") -> "Route":
+        """Construit une route heuristique selon la méthode choisie :
+        - 'ppv' : plus proche voisin
+        - '2opt' : 2-opt (à partir d'une route aléatoire ou PPV)
+        """
+        if self.matrice_od is None:
+            self.calcul_matrice_cout_od()
+
+        if methode == "ppv":
+            # Heuristique du plus proche voisin
+            n = self.nb_lieux
+            visited = [False] * n
+            ordre = [0]
+            visited[0] = True
+            current = 0
+            for _ in range(n - 1):
+                nxt = self.plus_proche_voisin(current, visited)
+                ordre.append(nxt)
+                visited[nxt] = True
+                current = nxt
+            ordre.append(0)  # retour au point de départ
+            return Route(self, ordre)
+
+        elif methode == "2opt":
+            # On peut démarrer d'une route aléatoire puis améliorer
+            route_init = Route(self)
+            route_init.ameliorer_2opt()
+            return route_init
+
+        else:
+            raise ValueError("Méthode inconnue. Utilisez 'ppv' ou '2opt'.")
+
 
 
 class Route:
@@ -218,12 +251,37 @@ class Route:
 
     def calcul_distance(self) -> float:
         return self.graph.calcul_distance_route(self.ordre)
+    
+    def ameliorer_2opt(self):
+        """Améliore la route actuelle par l’algorithme 2-opt"""
+        improved = True
+        best_distance = self.calcul_distance()
+        best_ordre = self.ordre.copy()
+
+        while improved:
+            improved = False
+            for i in range(1, len(best_ordre) - 2):
+                for j in range(i + 1, len(best_ordre) - 1):
+                    if j - i == 1:
+                        continue  # évite les inversions inutiles
+                    new_ordre = best_ordre[:i] + best_ordre[i:j][::-1] + best_ordre[j:]
+                    new_route = Route(self.graph, new_ordre)
+                    new_distance = new_route.calcul_distance()
+
+                    if new_distance < best_distance:
+                        best_ordre = new_ordre
+                        best_distance = new_distance
+                        improved = True
+            self.ordre = best_ordre.copy()
+        return best_ordre, best_distance
 
     def is_valid(self) -> bool:
         return len(self.ordre) >= 2 and self.ordre[0] == 0 and self.ordre[-1] == 0 and len(set(self.ordre[1:-1])) == (len(self.ordre) - 2)
 
     def __repr__(self):
         return f"Route(dist={self.calcul_distance():.2f}, ordre={self.ordre})"
+
+    ### potentiellement rajout des opérateurs de comparaison
 
 
 class Affichage:
@@ -348,14 +406,18 @@ class Affichage:
         self.root.mainloop()
 
 
-# Fonctions utilitaires pour tests rapides (si exécuté directement)
+
+
 if __name__ == '__main__':
-    g = Graph(nb_lieux=15)
+    g = Graph(nb_lieux=5)
     g.calcul_matrice_cout_od()
-    # créons une petite population aléatoire
-    population = [Route(g) for _ in range(20)]
-    # trouver la meilleure
-    best = min(population, key=lambda r: r.calcul_distance())
-    aff = Affichage(g, routes_population=population, group_name='Groupe Exemple')
-    aff.best_route = best
+
+    # Choisir l'heuristique : "ppv" ou "2opt"
+    methode = "ppv"  # ou "2opt"
+    route = g.route_heuristique(methode)
+
+    print(f"Route trouvée avec {methode}: {route.ordre}")
+    print(f"Distance totale: {route.calcul_distance():.2f}")
+
+    aff = Affichage(g, routes_population=[route], group_name=f'Heuristique {methode.upper()}')
     aff.mainloop()
