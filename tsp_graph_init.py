@@ -149,6 +149,7 @@ class Graph:
     def calcul_matrice_cout_od(self):
         """Calcule la matrice symétrique des distances euclidiennes entre tous les lieux.
         Stocke le résultat dans self.matrice_od (numpy.ndarray shape (n,n)).
+        Affiche également la matrice dans la console.
         """
         n = self.nb_lieux
         mat = np.zeros((n, n), dtype=float)
@@ -158,7 +159,14 @@ class Graph:
                 mat[i, j] = d
                 mat[j, i] = d
         self.matrice_od = mat
+
+        # affichage formaté
+        print("Matrice des distances euclidiennes :")
+        for row in mat:
+            print(" ".join(f"{val:6.2f}" for val in row))
+
         return mat
+
 
     def plus_proche_voisin(self, index: int, visited: Optional[List[bool]] = None) -> int:
         """Retourne l'indice du plus proche voisin du lieu `index` non visité.
@@ -193,15 +201,10 @@ class Graph:
         return float(dist)
     
     def route_heuristique(self, methode: str = "ppv") -> "Route":
-        """Construit une route heuristique selon la méthode choisie :
-        - 'ppv' : plus proche voisin
-        - '2opt' : 2-opt (à partir d'une route aléatoire ou PPV)
-        """
         if self.matrice_od is None:
             self.calcul_matrice_cout_od()
 
         if methode == "ppv":
-            # Heuristique du plus proche voisin
             n = self.nb_lieux
             visited = [False] * n
             ordre = [0]
@@ -212,17 +215,23 @@ class Graph:
                 ordre.append(nxt)
                 visited[nxt] = True
                 current = nxt
-            ordre.append(0)  # retour au point de départ
+            ordre.append(0)
             return Route(self, ordre)
 
         elif methode == "2opt":
-            # On peut démarrer d'une route aléatoire puis améliorer
             route_init = Route(self)
             route_init.ameliorer_2opt()
             return route_init
 
+        elif methode == "lk":
+            route_init = Route(self)
+            route_init.ameliorer_lin_kernighan()  # <- plus besoin de passer route_init
+            return route_init
+
         else:
-            raise ValueError("Méthode inconnue. Utilisez 'ppv' ou '2opt'.")
+            raise ValueError("Méthode inconnue. Utilisez 'ppv', '2opt' ou 'lk'.")
+
+
 
 
 
@@ -274,6 +283,38 @@ class Route:
                         improved = True
             self.ordre = best_ordre.copy()
         return best_ordre, best_distance
+    
+    def ameliorer_lin_kernighan(self, max_iter: int = 100):
+        """
+        Améliore la route actuelle avec une heuristique simplifiée Lin-Kernighan.
+        """
+        best_distance = self.calcul_distance()
+        best_order = self.ordre.copy()
+        n = len(best_order)
+
+        for iteration in range(max_iter):
+            improved = False
+            for i in range(1, n - 2):
+                for j in range(i + 1, n - 1):
+                    # inverser le segment i:j pour créer une nouvelle route candidate
+                    new_order = best_order[:i] + best_order[i:j][::-1] + best_order[j:]
+                    new_route = Route(self.graph, new_order)
+                    new_distance = new_route.calcul_distance()
+
+                    if new_distance < best_distance:
+                        best_order = new_order
+                        best_distance = new_distance
+                        improved = True
+                        break  # sortir de la boucle j
+                if improved:
+                    break  # sortir de la boucle i
+            if not improved:
+                break  # plus d'amélioration possible
+
+        self.ordre = best_order
+        return self.ordre, best_distance
+
+    
 
     def is_valid(self) -> bool:
         return len(self.ordre) >= 2 and self.ordre[0] == 0 and self.ordre[-1] == 0 and len(set(self.ordre[1:-1])) == (len(self.ordre) - 2)
@@ -409,11 +450,11 @@ class Affichage:
 
 
 if __name__ == '__main__':
-    g = Graph(nb_lieux=10)
+    g = Graph(nb_lieux=100)
     g.calcul_matrice_cout_od()
 
     # Toutes les heuristiques disponibles
-    methodes = ["ppv", "2opt"]
+    methodes = ["ppv", "2opt", "lk"]
     routes = []
 
     for methode in methodes:
@@ -425,3 +466,4 @@ if __name__ == '__main__':
     # Affichage avec toutes les routes
     aff = Affichage(g, routes_population=routes, group_name="Toutes les heuristiques")
     aff.mainloop()
+
