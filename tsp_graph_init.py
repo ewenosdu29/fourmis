@@ -54,7 +54,7 @@ class Lieu:
         self.y = float(y)
         self.name = str(name) if name is not None else ""
 
-    def distance_to(self, other: "Lieu") -> float:
+    def distance(self, other: "Lieu") -> float:
         dx = self.x - other.x
         dy = self.y - other.y
         return sqrt(dx * dx + dy * dy)
@@ -154,7 +154,7 @@ class Graph:
         mat = np.zeros((n, n), dtype=float)
         for i in range(n):
             for j in range(i + 1, n):
-                d = self.liste_lieux[i].distance_to(self.liste_lieux[j])
+                d = self.liste_lieux[i].distance(self.liste_lieux[j])
                 mat[i, j] = d
                 mat[j, i] = d
         self.matrice_od = mat
@@ -409,15 +409,19 @@ class Affichage:
 
 
 if __name__ == '__main__':
-    g = Graph(nb_lieux=5)
+    g = Graph(nb_lieux=10)
     g.calcul_matrice_cout_od()
 
-    # Choisir l'heuristique : "ppv" ou "2opt"
-    methode = "ppv"  # ou "2opt"
-    route = g.route_heuristique(methode)
+    # Toutes les heuristiques disponibles
+    methodes = ["ppv", "2opt"]
+    routes = []
 
-    print(f"Route trouvée avec {methode}: {route.ordre}")
-    print(f"Distance totale: {route.calcul_distance():.2f}")
+    for methode in methodes:
+        route = g.route_heuristique(methode)
+        print(f"Route trouvée avec {methode}: {route.ordre}")
+        print(f"Distance totale: {route.calcul_distance():.2f}")
+        routes.append(route)
 
-    aff = Affichage(g, routes_population=[route], group_name=f'Heuristique {methode.upper()}')
+    # Affichage avec toutes les routes
+    aff = Affichage(g, routes_population=routes, group_name="Toutes les heuristiques")
     aff.mainloop()
