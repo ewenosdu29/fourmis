@@ -1,31 +1,3 @@
-"""
-Fichier : tsp_graph_init.py
-But: implémentation des classes demandées pour le projet TSP.
-Dépendances autorisées : numpy, random, time, pandas, tkinter, csv
-
-Classes implémentées :
- - Lieu
- - Graph
- - Route
- - Affichage (Tkinter)
-
-Usage rapide :
->>> from tsp_graph_init import Graph, Route, Affichage
->>> g = Graph(nb_lieux=20)                # génère aléatoirement 20 lieux
->>> g.calcul_matrice_cout_od()
->>> r = Route(g)                           # route aléatoire
->>> print(g.calcul_distance_route(r.ordre))
->>> Affichage(g, routes_population=[r]).mainloop()
-
-Remarques :
- - Le format CSV accepté par charger_graph : colonnes x,y,[name] (avec ou sans en-tête).
- - TOUCHES :
-     - <Escape> : quitte l'application
-     - 'p' : afficher/masquer les N meilleures routes (paramétrable via N_BEST)
-     - 'm' : afficher/masquer la matrice de coûts dans la zone de texte
-
-"""
-
 import csv
 import random
 import time
@@ -39,7 +11,7 @@ from tkinter import scrolledtext
 # Constantes graphiques / environnement
 LARGEUR = 800
 HAUTEUR = 600
-NB_LIEUX = 10
+NB_LIEUX = 101
 RAYON_LIEU = 8
 N_BEST = 5  # par defaut pour l'affichage des N meilleures routes
 
@@ -80,6 +52,7 @@ class Graph:
         # si pas de chargement CSV, on génère aléatoirement
         self.generer_lieux_aleatoires(self.nb_lieux)
 
+
     def generer_lieux_aleatoires(self, nb: int):
         self.liste_lieux = []
         margin = 20
@@ -89,6 +62,7 @@ class Graph:
             self.liste_lieux.append(Lieu(x, y, name=str(i)))
         self.nb_lieux = len(self.liste_lieux)
         self.matrice_od = None
+
 
     def charger_graph(self, filename: str):
         """Charger les lieux depuis un CSV. Format attendu : x,y[,name]
@@ -146,11 +120,15 @@ class Graph:
         self.nb_lieux = len(self.liste_lieux)
         self.matrice_od = None
 
+
     def calcul_matrice_cout_od(self):
         """Calcule la matrice symétrique des distances euclidiennes entre tous les lieux.
         Stocke le résultat dans self.matrice_od (numpy.ndarray shape (n,n)).
-        Affiche également la matrice dans la console.
+        Affiche également le temps d'exécution.
         """
+        import time  # si ce n'est pas déjà importé
+        start_time = time.time()  # début du chronométrage
+
         n = self.nb_lieux
         mat = np.zeros((n, n), dtype=float)
         for i in range(n):
@@ -160,15 +138,37 @@ class Graph:
                 mat[j, i] = d
         self.matrice_od = mat
 
-        # affichage formaté
+        # affichage formaté désactivé
         #print("Matrice des distances euclidiennes :")
         #for row in mat:
         #    print(" ".join(f"{val:6.2f}" for val in row))
 
+        end_time = time.time()  # fin du chronométrage
+        print(f"Temps de calcul de la matrice (boucles Python) : {end_time - start_time:.6f} secondes")
+
         return mat
 
 
-    def plus_proche_voisin(self, index: int, visited: Optional[List[bool]] = None) -> int:
+    def plus_proche_voisin(self, index: int, remaining: Optional[set] = None) -> int:
+        """Retourne l'indice du plus proche voisin du lieu `index` dans remaining.
+        Si remaining est None, on considère tous les lieux sauf index.
+        """
+        if self.matrice_od is None:
+            self.calcul_matrice_cout_od()
+
+        row = self.matrice_od[index]
+        if remaining is None:
+            # tous les lieux sauf index
+            remaining = set(range(self.nb_lieux)) - {index}
+
+        # conversion en array numpy pour vectorisation
+        rem_list = np.array(list(remaining))
+        distances = row[rem_list]
+        best_idx = rem_list[np.argmin(distances)]
+        return int(best_idx)
+    
+
+    def plus_proche_voisin_inf_100(self, index: int, visited: Optional[List[bool]] = None) -> int:
         """Retourne l'indice du plus proche voisin du lieu `index` non visité.
         Si visited est None, on renvoie le plus proche parmi tous sauf index.
         """
@@ -189,7 +189,6 @@ class Graph:
                 best_idx = j
         return best_idx
 
-    
 
     def calcul_distance_route(self, ordre: List[int]) -> float:
         """Calcule la distance totale d'une route (liste d'indices)."""
@@ -202,21 +201,40 @@ class Graph:
             dist += self.matrice_od[a, b]
         return float(dist)
     
+
     def route_heuristique(self, methode: str = "ppv") -> "Route":
         if self.matrice_od is None:
             self.calcul_matrice_cout_od()
 
         if methode == "ppv":
             n = self.nb_lieux
+            remaining = set(range(n))
+            ordre = [0]
+            current = 0
+            remaining.remove(current)
+
+            for _ in range(n - 1):
+                nxt = self.plus_proche_voisin(current, remaining)
+                ordre.append(nxt)
+                remaining.remove(nxt)
+                current = nxt
+
+            ordre.append(0)
+            return Route(self, ordre)
+        
+        elif methode == "ppv2":
+            n = self.nb_lieux
             visited = [False] * n
             ordre = [0]
-            visited[0] = True
             current = 0
+            visited[current] = True
+
             for _ in range(n - 1):
-                nxt = self.plus_proche_voisin(current, visited)
+                nxt = self.plus_proche_voisin_inf_100(current, visited)
                 ordre.append(nxt)
                 visited[nxt] = True
                 current = nxt
+
             ordre.append(0)
             return Route(self, ordre)
 
@@ -226,9 +244,7 @@ class Graph:
             return route_init
 
         else:
-            raise ValueError("Méthode inconnue. Utilisez 'ppv', '2opt' ou 'lk'.")
-
-
+            raise ValueError("Méthode inconnue. Utilisez 'ppv', '2opt'.")
 
 
 
@@ -259,29 +275,40 @@ class Route:
         return self.graph.calcul_distance_route(self.ordre)
     
     def ameliorer_2opt(self):
-        """Améliore la route actuelle par l’algorithme 2-opt"""
+        """Améliore la route actuelle par l’algorithme 2-opt optimisé (delta distance)."""
         improved = True
         best_distance = self.calcul_distance()
         best_ordre = self.ordre.copy()
+        n = len(best_ordre)
 
         while improved:
             improved = False
-            for i in range(1, len(best_ordre) - 2):
-                for j in range(i + 1, len(best_ordre) - 1):
+            for i in range(1, n - 2):
+                for j in range(i + 1, n - 1):
                     if j - i == 1:
-                        continue  # évite les inversions inutiles
-                    new_ordre = best_ordre[:i] + best_ordre[i:j][::-1] + best_ordre[j:]
-                    new_route = Route(self.graph, new_ordre)
-                    new_distance = new_route.calcul_distance()
+                        continue  # éviter les inversions inutiles
 
-                    if new_distance < best_distance:
-                        best_ordre = new_ordre
-                        best_distance = new_distance
+                    a, b = best_ordre[i - 1], best_ordre[i]
+                    c, d = best_ordre[j - 1], best_ordre[j]
+
+                    # calcul du delta de distance
+                    delta = (
+                        self.graph.matrice_od[a, c] +
+                        self.graph.matrice_od[b, d] -
+                        self.graph.matrice_od[a, b] -
+                        self.graph.matrice_od[c, d]
+                    )
+
+                    if delta < -1e-12:  # tolérance flottant
+                        # inversion in-place du segment i:j
+                        best_ordre[i:j] = best_ordre[i:j][::-1]
+                        best_distance += delta
                         improved = True
+
             self.ordre = best_ordre.copy()
+
         return best_ordre, best_distance
     
-
     def is_valid(self) -> bool:
         return len(self.ordre) >= 2 and self.ordre[0] == 0 and self.ordre[-1] == 0 and len(set(self.ordre[1:-1])) == (len(self.ordre) - 2)
 
@@ -418,17 +445,35 @@ class Affichage:
 
 
 if __name__ == '__main__':
-        # === Optionnel : affichage graphique de la meilleure méthode ===
-    if NB_LIEUX <= 100:
-        methode_affichee = "2opt"
-    else:
-        methode_affichee = "ppv"
+    import time
 
-    print(f"\nAffichage de la méthode choisie automatiquement ({methode_affichee.upper()}) ...")
-
+    # === Optionnel : affichage graphique de la meilleure méthode ===
     g = Graph(nb_lieux=NB_LIEUX)
     g.calcul_matrice_cout_od()
-    route_finale = g.route_heuristique(methode_affichee)
+
+    if NB_LIEUX <= 100:
+        # On commence par PPV puis on améliore avec 2OPT
+        print("\nMéthode utilisée : PPV + 2OPT")
+
+        # Chronométrage PPV + 2OPT
+        start_2opt = time.time()
+        route_initiale = g.route_heuristique("ppv2")
+        route_initiale.ameliorer_2opt()
+        end_2opt = time.time()
+        print(f"Temps d'exécution : {end_2opt - start_2opt:.6f} secondes")
+
+        route_finale = route_initiale
+        methode_affichee = "ppv+2opt"
+
+    else:
+        # Pour les grands graphes, on fait juste PPV
+        print("\nMéthode utilisée : PPV")
+        start_2opt = time.time()
+        route_finale = g.route_heuristique("ppv")
+        end_2opt = time.time()
+        print(f"Temps d'exécution : {end_2opt - start_2opt:.6f} secondes")
+
+        methode_affichee = "ppv"
 
     aff = Affichage(
         g,
@@ -437,6 +482,7 @@ if __name__ == '__main__':
         methode=methode_affichee
     )
     aff.mainloop()
+
 
 
 
