@@ -39,7 +39,7 @@ from tkinter import scrolledtext
 # Constantes graphiques / environnement
 LARGEUR = 800
 HAUTEUR = 600
-NB_LIEUX = 20
+NB_LIEUX = 10
 RAYON_LIEU = 8
 N_BEST = 5  # par defaut pour l'affichage des N meilleures routes
 
@@ -189,50 +189,6 @@ class Graph:
                 best_idx = j
         return best_idx
 
-    def nearest_insertion_route(self) -> "Route":
-        if self.matrice_od is None:
-            self.calcul_matrice_cout_od()
-
-        n = self.nb_lieux
-        if n < 2:
-            return Route(self, list(range(n)))
-
-        # Commencer par 0
-        start = 0
-
-        # trouver la ville la plus proche de 0
-        nearest = min(((i, self.matrice_od[start, i]) for i in range(1, n)),key=lambda x: x[1])[0]
-
-        tour = [start, nearest]
-        remaining = set(range(n)) - set(tour)
-
-        while remaining:
-            # trouver la ville la plus proche du tour
-            nearest_city, best_dist = None, float("inf")
-            for city in remaining:
-                d = min(self.matrice_od[city, t] for t in tour)
-                if d < best_dist:
-                    best_dist = d
-                    nearest_city = city
-
-            # meilleure position d'insertion
-            best_pos, best_increase = None, float("inf")
-            for i in range(len(tour)):
-                j = (i + 1) % len(tour)
-                increase = (self.matrice_od[tour[i], nearest_city] + self.matrice_od[nearest_city, tour[j]] -self.matrice_od[tour[i], tour[j]])
-               
-                if increase < best_increase:
-                    best_increase = increase
-                    best_pos = j
-
-            tour.insert(best_pos, nearest_city)
-            remaining.remove(nearest_city)
-
-        # fermer le tour
-        if tour[-1] != tour[0]:
-            tour.append(tour[0])
-
-        return Route(self, tour)
     
 
     def calcul_distance_route(self, ordre: List[int]) -> float:
@@ -268,14 +224,6 @@ class Graph:
             route_init = Route(self)
             route_init.ameliorer_2opt()
             return route_init
-
-        elif methode == "lk":
-            route_init = Route(self)
-            route_init.ameliorer_lin_kernighan()  # <- plus besoin de passer route_init
-            return route_init
-        
-        elif methode == "ni":
-            return self.nearest_insertion_route()
 
         else:
             raise ValueError("Méthode inconnue. Utilisez 'ppv', '2opt' ou 'lk'.")
@@ -332,37 +280,6 @@ class Route:
                         improved = True
             self.ordre = best_ordre.copy()
         return best_ordre, best_distance
-    
-    def ameliorer_lin_kernighan(self, max_iter: int = 100):
-        """
-        Améliore la route actuelle avec une heuristique simplifiée Lin-Kernighan.
-        """
-        best_distance = self.calcul_distance()
-        best_order = self.ordre.copy()
-        n = len(best_order)
-
-        for iteration in range(max_iter):
-            improved = False
-            for i in range(1, n - 2):
-                for j in range(i + 1, n - 1):
-                    # inverser le segment i:j pour créer une nouvelle route candidate
-                    new_order = best_order[:i] + best_order[i:j][::-1] + best_order[j:]
-                    new_route = Route(self.graph, new_order)
-                    new_distance = new_route.calcul_distance()
-
-                    if new_distance < best_distance:
-                        best_order = new_order
-                        best_distance = new_distance
-                        improved = True
-                        break  # sortir de la boucle j
-                if improved:
-                    break  # sortir de la boucle i
-            if not improved:
-                break  # plus d'amélioration possible
-
-        self.ordre = best_order
-        return self.ordre, best_distance
-
     
 
     def is_valid(self) -> bool:
@@ -501,35 +418,25 @@ class Affichage:
 
 
 if __name__ == '__main__':
-    g = Graph(nb_lieux=10)
+        # === Optionnel : affichage graphique de la meilleure méthode ===
+    if NB_LIEUX <= 100:
+        methode_affichee = "2opt"
+    else:
+        methode_affichee = "ppv"
+
+    print(f"\nAffichage de la méthode choisie automatiquement ({methode_affichee.upper()}) ...")
+
+    g = Graph(nb_lieux=NB_LIEUX)
     g.calcul_matrice_cout_od()
+    route_finale = g.route_heuristique(methode_affichee)
 
-    # Toutes les heuristiques disponibles
-    methodes = ["ppv", "2opt", "lk", "ni"]
-    routes = []
-
-    # Dictionnaire pour associer chaque route à sa méthode
-    method_to_route = {}
-
-    for methode in methodes:
-        route = g.route_heuristique(methode)
-        print(f"Route trouvée avec {methode}: {route.ordre}")
-        print(f"Distance totale: {route.calcul_distance():.2f}")
-        routes.append(route)
-        method_to_route[methode] = route
-
-    # Trouver la meilleure méthode (celle avec la plus petite distance)
-    best_methode, best_route = min(method_to_route.items(), key=lambda item: item[1].calcul_distance())
-
-    print(f"\n👉 Meilleure méthode : {best_methode} ({best_route.calcul_distance():.2f})")
-
-    # Affichage avec toutes les routes et indication de la meilleure méthode
     aff = Affichage(
         g,
-        routes_population=routes,
-        group_name="Toutes les heuristiques",
-        methode=best_methode
+        routes_population=[route_finale],
+        group_name=f"Méthode affichée automatiquement : {methode_affichee.upper()}",
+        methode=methode_affichee
     )
     aff.mainloop()
+
 
 
