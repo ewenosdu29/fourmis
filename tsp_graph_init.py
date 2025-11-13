@@ -161,9 +161,9 @@ class Graph:
         self.matrice_od = mat
 
         # affichage formaté
-        print("Matrice des distances euclidiennes :")
-        for row in mat:
-            print(" ".join(f"{val:6.2f}" for val in row))
+        #print("Matrice des distances euclidiennes :")
+        #for row in mat:
+        #    print(" ".join(f"{val:6.2f}" for val in row))
 
         return mat
 
@@ -188,6 +188,52 @@ class Graph:
                 best_d = d
                 best_idx = j
         return best_idx
+
+    def nearest_insertion_route(self) -> "Route":
+        if self.matrice_od is None:
+            self.calcul_matrice_cout_od()
+
+        n = self.nb_lieux
+        if n < 2:
+            return Route(self, list(range(n)))
+
+        # Commencer par 0
+        start = 0
+
+        # trouver la ville la plus proche de 0
+        nearest = min(((i, self.matrice_od[start, i]) for i in range(1, n)),key=lambda x: x[1])[0]
+
+        tour = [start, nearest]
+        remaining = set(range(n)) - set(tour)
+
+        while remaining:
+            # trouver la ville la plus proche du tour
+            nearest_city, best_dist = None, float("inf")
+            for city in remaining:
+                d = min(self.matrice_od[city, t] for t in tour)
+                if d < best_dist:
+                    best_dist = d
+                    nearest_city = city
+
+            # meilleure position d'insertion
+            best_pos, best_increase = None, float("inf")
+            for i in range(len(tour)):
+                j = (i + 1) % len(tour)
+                increase = (self.matrice_od[tour[i], nearest_city] + self.matrice_od[nearest_city, tour[j]] -self.matrice_od[tour[i], tour[j]])
+               
+                if increase < best_increase:
+                    best_increase = increase
+                    best_pos = j
+
+            tour.insert(best_pos, nearest_city)
+            remaining.remove(nearest_city)
+
+        # fermer le tour
+        if tour[-1] != tour[0]:
+            tour.append(tour[0])
+
+        return Route(self, tour)
+    
 
     def calcul_distance_route(self, ordre: List[int]) -> float:
         """Calcule la distance totale d'une route (liste d'indices)."""
@@ -227,6 +273,9 @@ class Graph:
             route_init = Route(self)
             route_init.ameliorer_lin_kernighan()  # <- plus besoin de passer route_init
             return route_init
+        
+        elif methode == "ni":
+            return self.nearest_insertion_route()
 
         else:
             raise ValueError("Méthode inconnue. Utilisez 'ppv', '2opt' ou 'lk'.")
@@ -334,7 +383,13 @@ class Affichage:
     - Touches : ESC pour quitter, 'p' pour afficher/masquer N meilleures routes (gris clair), 'm' pour afficher/masquer matrice des coûts
     """
 
-    def __init__(self, graph: Graph, routes_population: Optional[List[Route]] = None, group_name: str = "Groupe TSP"):
+    def __init__(
+        self,
+        graph: Graph,
+        routes_population: Optional[List[Route]] = None,
+        group_name: str = "Groupe TSP",
+        methode: str = "inconnue"
+    ):
         self.graph = graph
         if self.graph.matrice_od is None:
             self.graph.calcul_matrice_cout_od()
@@ -345,6 +400,7 @@ class Affichage:
         self.show_population = False
         self.show_matrix = False
         self.N_best = N_BEST
+        self.methode = methode  # <-- ajout du paramètre méthode
 
         # Tkinter setup
         self.root = tk.Tk()
@@ -383,16 +439,13 @@ class Affichage:
             lieu = self.graph.liste_lieux[idx]
             coords.extend(self._coord_canvas(lieu))
         dash = (4, 6) if dashed else None
-        # supprime ancienne route du même tag
         self.canvas.delete(tag)
         self.canvas.create_line(*coords, fill=color, width=width, dash=dash, tags=tag)
-        # affiche l'ordre au-dessus de chaque lieu (petit texte)
         for order_idx, node in enumerate(route.ordre[:-1]):
             x, y = self._coord_canvas(self.graph.liste_lieux[node])
             self.canvas.create_text(x, y - 12, text=str(order_idx), font=("Arial", 8), tags=tag)
 
     def _draw_population(self):
-        # dessine les N meilleures routes en gris clair
         self.canvas.delete('population')
         if not self.routes_population:
             return
@@ -407,7 +460,6 @@ class Affichage:
         mat = self.graph.matrice_od
         n = self.graph.nb_lieux
         self.text.insert(tk.END, "Matrice des co\u00fbts (distances euclidiennes)\n")
-        # formatage simple
         for i in range(n):
             row = ' '.join(f"{mat[i,j]:6.1f}" for j in range(n))
             self.text.insert(tk.END, row + "\n")
@@ -418,14 +470,13 @@ class Affichage:
         if self.show_population:
             self._draw_population()
         if self.best_route:
-            # ligne bleue pointillée pour la meilleure route
             self._draw_route(self.best_route, color='blue', dashed=True, width=2, tag='best_route')
         self._draw_cost_matrix_in_text()
         self._log_status()
 
     def _log_status(self):
-        # affiche quelques informations dans la zone de texte
         self.text.insert(tk.END, f"Heure: {time.strftime('%H:%M:%S')} - Lieux: {self.graph.nb_lieux}\n")
+        self.text.insert(tk.END, f"Méthode utilisée: {self.methode}\n")  # <-- affichage dans les logs
         if self.best_route:
             self.text.insert(tk.END, f"Meilleure distance: {self.best_route.calcul_distance():.2f}\n")
         if self.show_population and self.routes_population:
@@ -450,20 +501,35 @@ class Affichage:
 
 
 if __name__ == '__main__':
-    g = Graph(nb_lieux=100)
+    g = Graph(nb_lieux=20)
     g.calcul_matrice_cout_od()
 
     # Toutes les heuristiques disponibles
-    methodes = ["ppv", "2opt", "lk"]
+    methodes = ["ppv", "2opt", "lk", "ni"]
     routes = []
+
+    # Dictionnaire pour associer chaque route à sa méthode
+    method_to_route = {}
 
     for methode in methodes:
         route = g.route_heuristique(methode)
         print(f"Route trouvée avec {methode}: {route.ordre}")
         print(f"Distance totale: {route.calcul_distance():.2f}")
         routes.append(route)
+        method_to_route[methode] = route
 
-    # Affichage avec toutes les routes
-    aff = Affichage(g, routes_population=routes, group_name="Toutes les heuristiques")
+    # Trouver la meilleure méthode (celle avec la plus petite distance)
+    best_methode, best_route = min(method_to_route.items(), key=lambda item: item[1].calcul_distance())
+
+    print(f"\n👉 Meilleure méthode : {best_methode} ({best_route.calcul_distance():.2f})")
+
+    # Affichage avec toutes les routes et indication de la meilleure méthode
+    aff = Affichage(
+        g,
+        routes_population=routes,
+        group_name="Toutes les heuristiques",
+        methode=best_methode  # ✅ ajouté ici
+    )
     aff.mainloop()
+
 
