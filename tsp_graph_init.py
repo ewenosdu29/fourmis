@@ -501,7 +501,7 @@ class Affichage:
 
 
 if __name__ == '__main__':
-    g = Graph(nb_lieux=20)
+    g = Graph(nb_lieux=10)
     g.calcul_matrice_cout_od()
 
     # Toutes les heuristiques disponibles
@@ -528,7 +528,7 @@ if __name__ == '__main__':
         g,
         routes_population=routes,
         group_name="Toutes les heuristiques",
-        methode=best_methode  # ✅ ajouté ici
+        methode=best_methode
     )
     aff.mainloop()
 
