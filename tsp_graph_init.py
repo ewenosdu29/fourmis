@@ -157,9 +157,6 @@ class Graph:
             self.calcul_matrice_cout_od()
 
         row = self.matrice_od[index]
-        if remaining is None:
-            # tous les lieux sauf index
-            remaining = set(range(self.nb_lieux)) - {index}
 
         # conversion en array numpy pour vectorisation
         rem_list = np.array(list(remaining))
@@ -168,26 +165,25 @@ class Graph:
         return int(best_idx)
     
 
-    def plus_proche_voisin_inf_100(self, index: int, visited: Optional[List[bool]] = None) -> int:
-        """Retourne l'indice du plus proche voisin du lieu `index` non visité.
-        Si visited est None, on renvoie le plus proche parmi tous sauf index.
+    def plus_proche_voisin_inf_100(self, index: int, remaining: Optional[set] = None) -> int:
+        """Retourne l'indice du plus proche voisin du lieu `index` dans remaining.
+        Si remaining est None, on considère tous les lieux sauf index.
         """
         if self.matrice_od is None:
             self.calcul_matrice_cout_od()
+        
         row = self.matrice_od[index]
-        n = self.nb_lieux
+
         best_idx = -1
         best_d = float('inf')
-        for j in range(n):
-            if j == index:
-                continue
-            if visited is not None and visited[j]:
-                continue
+        for j in remaining:
             d = row[j]
             if d < best_d:
                 best_d = d
                 best_idx = j
+
         return best_idx
+
 
 
     def calcul_distance_route(self, ordre: List[int]) -> float:
@@ -208,10 +204,9 @@ class Graph:
 
         if methode == "ppv":
             n = self.nb_lieux
-            remaining = set(range(n))
+            remaining = set(range(1, n))
             ordre = [0]
             current = 0
-            remaining.remove(current)
 
             for _ in range(n - 1):
                 nxt = self.plus_proche_voisin(current, remaining)
@@ -224,19 +219,19 @@ class Graph:
         
         elif methode == "ppv2":
             n = self.nb_lieux
-            visited = [False] * n
             ordre = [0]
             current = 0
-            visited[current] = True
+            remaining = set(range(1, n))
 
             for _ in range(n - 1):
-                nxt = self.plus_proche_voisin_inf_100(current, visited)
+                nxt = self.plus_proche_voisin_inf_100(current, remaining)
                 ordre.append(nxt)
-                visited[nxt] = True
+                remaining.remove(nxt)
                 current = nxt
 
             ordre.append(0)
             return Route(self, ordre)
+
 
         elif methode == "2opt":
             route_init = Route(self)
@@ -244,7 +239,7 @@ class Graph:
             return route_init
 
         else:
-            raise ValueError("Méthode inconnue. Utilisez 'ppv', '2opt'.")
+            raise ValueError("Méthode inconnue. Utilisez 'ppv', 'ppv2' ou '2opt'.")
 
 
 
