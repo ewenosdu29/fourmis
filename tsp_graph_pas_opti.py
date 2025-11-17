@@ -2,26 +2,19 @@ import csv
 import random
 import time
 from math import sqrt
-from typing import List, Optional, Tuple, Set
+from typing import List, Optional, Tuple
 
 import numpy as np
 import tkinter as tk
 from tkinter import scrolledtext
 
-# ============================================================================
-# CONSTANTES
-# ============================================================================
-
+# Constantes graphiques / environnement
 LARGEUR = 800
 HAUTEUR = 600
 NB_LIEUX = 10000
 RAYON_LIEU = 8
-N_BEST = 5  # par défaut pour l'affichage des N meilleures routes
+N_BEST = 5  # par defaut pour l'affichage des N meilleures routes
 
-
-# ============================================================================
-# CLASSE LIEU
-# ============================================================================
 
 class Lieu:
     """Représentation d'un lieu (x,y) avec un nom.
@@ -33,8 +26,7 @@ class Lieu:
         self.y = float(y)
         self.name = str(name) if name is not None else ""
 
-    def distance_to(self, other: "Lieu") -> float:
-        """Calcule la distance euclidienne vers un autre lieu."""
+    def distance(self, other: "Lieu") -> float:
         dx = self.x - other.x
         dy = self.y - other.y
         return sqrt(dx * dx + dy * dy)
@@ -43,91 +35,45 @@ class Lieu:
         return f"Lieu(name={self.name!r}, x={self.x:.2f}, y={self.y:.2f})"
 
 
-# ============================================================================
-# CLASSE GRAPH (OPTIMISÉE)
-# ============================================================================
-
 class Graph:
-    """Graphe de lieux IMMUTABLE et OPTIMISÉ.
-    
-    Une fois créé, le graphe ne change plus (liste_lieux fixe).
-    La matrice de distances est calculée AUTOMATIQUEMENT à la création.
-    
+    """Graphe de lieux.
+
     Attributs principaux :
-      - liste_lieux : List[Lieu] - TOUS les lieux (fixe, immuable)
-      - matrice_od : numpy.ndarray (n x n) - distances pré-calculées
-      - nb_lieux : int - nombre de lieux
-    
-    OPTIMISATIONS :
-      - Matrice calculée 1 fois automatiquement (pas de vérification répétée)
-      - Méthode plus_proche_voisin_rapide() pour itération sur set O(k)
-      - Graph réutilisable à l'infini (pas de modification interne)
+      - liste_lieux : List[Lieu]
+      - matrice_od : numpy.ndarray (NB x NB) des distances
     """
 
     def __init__(self, nb_lieux: int = NB_LIEUX, largeur: int = LARGEUR, hauteur: int = HAUTEUR):
-        """
-        Initialise un graphe avec génération aléatoire de lieux.
-        
-        Args:
-            nb_lieux: Nombre de lieux à générer
-            largeur: Largeur de l'espace (en pixels)
-            hauteur: Hauteur de l'espace (en pixels)
-        
-        Note: La matrice de distances est calculée AUTOMATIQUEMENT.
-        """
         self.largeur = largeur
         self.hauteur = hauteur
         self.nb_lieux = int(nb_lieux)
-        
-        # Liste unique et fixe de TOUS les lieux
         self.liste_lieux: List[Lieu] = []
-        
-        # Matrice des distances (sera calculée automatiquement)
         self.matrice_od: Optional[np.ndarray] = None
-        
-        # Génération aléatoire des lieux
+        # si pas de chargement CSV, on génère aléatoirement
         self.generer_lieux_aleatoires(self.nb_lieux)
 
 
     def generer_lieux_aleatoires(self, nb: int):
-        """
-        Génère nb lieux avec coordonnées aléatoires.
-        Marge de 20px pour éviter que les lieux touchent les bords.
-        
-        Args:
-            nb: Nombre de lieux à générer
-        """
         self.liste_lieux = []
         margin = 20
-        
         for i in range(nb):
-            # Coordonnées aléatoires avec marge
             x = random.uniform(margin, self.largeur - margin)
             y = random.uniform(margin, self.hauteur - margin)
             self.liste_lieux.append(Lieu(x, y, name=str(i)))
-        
         self.nb_lieux = len(self.liste_lieux)
         self.matrice_od = None
 
 
     def charger_graph(self, filename: str):
-        """
-        Charge les lieux depuis un fichier CSV.
-        Format attendu : x,y[,name] (avec ou sans ligne d'en-tête)
-        
-        Args:
-            filename: Chemin vers le fichier CSV
-        
-        Note: La matrice de distances est recalculée AUTOMATIQUEMENT.
+        """Charger les lieux depuis un CSV. Format attendu : x,y[,name]
+        Accepte ou non une ligne d'en-tête.
         """
         lieux = []
-        
-        # Lecture du fichier
         with open(filename, newline="", encoding="utf-8") as csvfile:
             reader = csv.reader(csvfile)
             rows = [r for r in reader if r]
 
-        # Détection d'en-tête (première ligne pas convertible en float)
+        # détecter en-tête si le premier élément n'est pas convertible en float
         def is_float(s):
             try:
                 float(s)
@@ -139,9 +85,8 @@ class Graph:
         if rows:
             first = rows[0]
             if not rows[0] or not is_float(first[0]):
-                start = 1  # Sauter la ligne d'en-tête
+                start = 1
 
-        # Lecture des lieux
         for r in rows[start:]:
             if len(r) >= 2:
                 x = float(r[0])
@@ -150,22 +95,22 @@ class Graph:
                 lieux.append(Lieu(x, y, name))
 
         if not lieux:
-            raise ValueError("Aucun lieu trouvé dans le fichier CSV")
+            raise ValueError("Aucun lieu trouv\u00e9 dans le fichier CSV")
 
-        # Mise à l'échelle si les coordonnées dépassent la zone
+        # si les coordonnées dépassent la zone, on les met à l'échelle
         xs = [l.x for l in lieux]
         ys = [l.y for l in lieux]
         minx, maxx = min(xs), max(xs)
         miny, maxy = min(ys), max(ys)
 
+        # échelle linéaire si besoin
         def rescale(val, mn, mx, out_min, out_max):
-            """Mise à l'échelle linéaire"""
             if mx == mn:
                 return (out_min + out_max) / 2
             return out_min + (val - mn) * (out_max - out_min) / (mx - mn)
 
-        margin = 20
         scaled = []
+        margin = 20
         for l in lieux:
             sx = rescale(l.x, minx, maxx, margin, self.largeur - margin)
             sy = rescale(l.y, miny, maxy, margin, self.hauteur - margin)
@@ -241,25 +186,14 @@ class Graph:
 
 
     def calcul_distance_route(self, ordre: List[int]) -> float:
-        """
-        Calcule la distance totale d'une route (liste d'indices).
-        
-        Args:
-            ordre: Liste d'indices de lieux (ex: [0, 3, 5, 1, 2, 0])
-        
-        Returns:
-            float: Distance totale de la route
-        
-        ✅ OPTIMISATION : Pas de vérification de matrice_od
-        """
+        """Calcule la distance totale d'une route (liste d'indices)."""
         if not ordre:
             return 0.0
-        
-        # ✅ PAS DE CHECK - la matrice est TOUJOURS calculée
+        if self.matrice_od is None:
+            self.calcul_matrice_cout_od()
         dist = 0.0
         for a, b in zip(ordre[:-1], ordre[1:]):
             dist += self.matrice_od[a, b]
-        
         return float(dist)
     
 
@@ -309,34 +243,22 @@ class Graph:
 
 
 class Route:
-    """Représente une route (ordre de visites).
-    
-    Par contrainte TSP, doit commencer et finir par le lieu 0.
-    
+    """Représente une route (ordre de visites). Par contrainte, doit commencer et finir par 0.
+
     Attributs :
-      - ordre : List[int] (ex: [0, 3, 8, 1, ..., 0])
-      - graph : Graph (référence au graphe)
+      - ordre : List[int] (ex: [0,3,8,1,...,0])
     """
 
     def __init__(self, graph: Graph, ordre: Optional[List[int]] = None):
-        """
-        Initialise une route.
-        
-        Args:
-            graph: Le graphe de référence
-            ordre: Liste d'indices de lieux (None = génération aléatoire)
-        
-        Note: Si ordre ne commence/finit pas par 0, ils sont ajoutés automatiquement.
-        """
         self.graph = graph
-        
         if ordre is None:
-            # Génère une permutation aléatoire avec 0 au début et à la fin
+            # génère une permutation aléatoire avec 0 en premier et dernier
             perm = list(range(1, graph.nb_lieux))
             random.shuffle(perm)
-            self.ordre = [0] + perm + [0]
+            ordre_gen = [0] + perm + [0]
+            self.ordre = ordre_gen
         else:
-            # Normalise pour s'assurer que commence et finit par 0
+            # on normalise pour s'assurer que commence et finit par 0
             if ordre[0] != 0:
                 ordre = [0] + ordre
             if ordre[-1] != 0:
@@ -344,7 +266,6 @@ class Route:
             self.ordre = ordre
 
     def calcul_distance(self) -> float:
-        """Calcule la distance totale de cette route."""
         return self.graph.calcul_distance_route(self.ordre)
     
     def ameliorer_2opt(self):
@@ -388,238 +309,134 @@ class Route:
     def __repr__(self):
         return f"Route(dist={self.calcul_distance():.2f}, ordre={self.ordre})"
 
+    ### potentiellement rajout des opérateurs de comparaison
 
-# ============================================================================
-# CLASSE AFFICHAGE
-# ============================================================================
 
 class Affichage:
-    """Affichage Tkinter du graphe et des routes.
-    
-    Fonctionnalités :
+    """Affichage Tkinter du graphe.
+
     - Affiche les lieux (cercles numérotés)
     - Affiche la meilleure route (ligne bleue pointillée)
-    - Affiche N meilleures routes en gris clair (touche 'p')
-    - Affiche la matrice des coûts (touche 'm')
-    - Zone de texte pour informations et statistiques
-    
-    Touches :
-    - ESC : quitter
-    - 'p' : afficher/masquer N meilleures routes
-    - 'm' : afficher/masquer matrice des coûts
+    - Zone de texte en dessous pour messages et affichage de matrice
+    - Touches : ESC pour quitter, 'p' pour afficher/masquer N meilleures routes (gris clair), 'm' pour afficher/masquer matrice des coûts
     """
 
-    def __init__(self, graph: Graph, routes_population: Optional[List[Route]] = None, 
-                 group_name: str = "Groupe TSP"):
-        """
-        Initialise l'affichage.
-        
-        Args:
-            graph: Le graphe à afficher
-            routes_population: Liste de routes (pour affichage des N meilleures)
-            group_name: Nom du groupe (affiché dans le titre)
-        """
+    def __init__(
+        self,
+        graph: Graph,
+        routes_population: Optional[List[Route]] = None,
+        group_name: str = "Groupe TSP",
+        methode: str = "inconnue"
+    ):
         self.graph = graph
+        if self.graph.matrice_od is None:
+            self.graph.calcul_matrice_cout_od()
         self.routes_population = routes_population or []
         self.best_route: Optional[Route] = None
-        
-        # Trouver la meilleure route de la population
         if self.routes_population:
             self.best_route = min(self.routes_population, key=lambda r: r.calcul_distance())
-        
-        # Options d'affichage
         self.show_population = False
         self.show_matrix = False
         self.N_best = N_BEST
         self.methode = methode  # <-- ajout du paramètre méthode
 
-        # ===== Configuration Tkinter =====
+        # Tkinter setup
         self.root = tk.Tk()
         self.root.title(f"TSP - {group_name}")
-        
-        # Canvas pour le dessin
-        self.canvas = tk.Canvas(
-            self.root, 
-            width=self.graph.largeur, 
-            height=self.graph.hauteur, 
-            bg="white"
-        )
+        self.canvas = tk.Canvas(self.root, width=self.graph.largeur, height=self.graph.hauteur, bg="white")
         self.canvas.pack()
 
-        # Zone de texte scrollable
+        # zone de texte scrollable
         self.text = scrolledtext.ScrolledText(self.root, height=8)
         self.text.pack(fill=tk.BOTH, expand=False)
 
-        # Raccourcis clavier
+        # bind keys
         self.root.bind('<Escape>', lambda e: self.root.quit())
         self.root.bind('p', lambda e: self.toggle_population())
         self.root.bind('m', lambda e: self.toggle_matrix())
 
-        # Dessin initial
         self._draw_all()
 
     def _coord_canvas(self, lieu: Lieu) -> Tuple[float, float]:
-        """Retourne les coordonnées canvas d'un lieu."""
         return lieu.x, lieu.y
 
     def _draw_lieux(self):
-        """Dessine tous les lieux du graphe (cercles numérotés)."""
         self.canvas.delete('lieu')
-        
         for idx, lieu in enumerate(self.graph.liste_lieux):
             x, y = self._coord_canvas(lieu)
             x0, y0 = x - RAYON_LIEU, y - RAYON_LIEU
             x1, y1 = x + RAYON_LIEU, y + RAYON_LIEU
-            
-            # Cercle
-            self.canvas.create_oval(
-                x0, y0, x1, y1, 
-                fill='white', 
-                outline='black', 
-                tags='lieu'
-            )
-            
-            # Numéro
-            self.canvas.create_text(
-                x, y, 
-                text=str(idx), 
-                tags='lieu'
-            )
+            self.canvas.create_oval(x0, y0, x1, y1, fill='white', outline='black', tags='lieu')
+            self.canvas.create_text(x, y, text=str(idx), tags='lieu')
 
-    def _draw_route(self, route: Route, color: str = 'blue', 
-                    dashed: bool = False, width: int = 2, tag: str = 'best'):
-        """
-        Dessine une route sur le canvas.
-        
-        Args:
-            route: La route à dessiner
-            color: Couleur de la ligne
-            dashed: True pour ligne pointillée
-            width: Épaisseur de la ligne
-            tag: Tag Tkinter pour identifier la route
-        """
+    def _draw_route(self, route: Route, color: str = 'blue', dashed: bool = False, width: int = 2, tag: str = 'best'):
         if not route or not route.ordre:
             return
-        
-        # Construire la liste de coordonnées
         coords = []
         for idx in route.ordre:
             lieu = self.graph.liste_lieux[idx]
             coords.extend(self._coord_canvas(lieu))
-        
-        # Style de ligne
         dash = (4, 6) if dashed else None
-        
-        # Supprimer ancienne route avec ce tag
         self.canvas.delete(tag)
-        
-        # Dessiner la ligne
-        self.canvas.create_line(
-            *coords, 
-            fill=color, 
-            width=width, 
-            dash=dash, 
-            tags=tag
-        )
-        
-        # Afficher l'ordre de visite au-dessus de chaque lieu
+        self.canvas.create_line(*coords, fill=color, width=width, dash=dash, tags=tag)
         for order_idx, node in enumerate(route.ordre[:-1]):
             x, y = self._coord_canvas(self.graph.liste_lieux[node])
-            self.canvas.create_text(
-                x, y - 12, 
-                text=str(order_idx), 
-                font=("Arial", 8), 
-                tags=tag
-            )
+            self.canvas.create_text(x, y - 12, text=str(order_idx), font=("Arial", 8), tags=tag)
 
     def _draw_population(self):
-        """Dessine les N meilleures routes de la population en gris clair."""
         self.canvas.delete('population')
-        
         if not self.routes_population:
             return
-        
-        # Trier par distance
         sorted_routes = sorted(self.routes_population, key=lambda r: r.calcul_distance())
-        
-        # Dessiner les N meilleures
-        for r in sorted_routes[:self.N_best]:
+        for r in sorted_routes[: self.N_best]:
             self._draw_route(r, color='lightgray', dashed=False, width=1, tag='population')
 
     def _draw_cost_matrix_in_text(self):
-        """Affiche la matrice des coûts dans la zone de texte."""
         self.text.delete('1.0', tk.END)
-        
         if not self.show_matrix:
             return
-        
         mat = self.graph.matrice_od
         n = self.graph.nb_lieux
-        
-        self.text.insert(tk.END, "Matrice des coûts (distances euclidiennes)\n")
-        self.text.insert(tk.END, "="*70 + "\n")
-        
-        # Formatage simple de la matrice
+        self.text.insert(tk.END, "Matrice des co\u00fbts (distances euclidiennes)\n")
         for i in range(n):
             row = ' '.join(f"{mat[i,j]:6.1f}" for j in range(n))
             self.text.insert(tk.END, row + "\n")
 
     def _draw_all(self):
-        """Redessine tout l'affichage."""
         self.canvas.delete('all')
-        
-        # Dessiner dans l'ordre : population, lieux, meilleure route
         self._draw_lieux()
-        
         if self.show_population:
             self._draw_population()
-        
         if self.best_route:
-            # Ligne bleue pointillée pour la meilleure route
-            self._draw_route(
-                self.best_route, 
-                color='blue', 
-                dashed=True, 
-                width=2, 
-                tag='best_route'
-            )
-        
+            self._draw_route(self.best_route, color='blue', dashed=True, width=2, tag='best_route')
         self._draw_cost_matrix_in_text()
         self._log_status()
 
     def _log_status(self):
-        """Affiche les informations dans la zone de texte."""
-        self.text.insert(tk.END, f"\nHeure: {time.strftime('%H:%M:%S')} - Lieux: {self.graph.nb_lieux}\n")
-        
+        self.text.insert(tk.END, f"Heure: {time.strftime('%H:%M:%S')} - Lieux: {self.graph.nb_lieux}\n")
+        self.text.insert(tk.END, f"Méthode utilisée: {self.methode}\n")  # <-- affichage dans les logs
         if self.best_route:
             self.text.insert(tk.END, f"Meilleure distance: {self.best_route.calcul_distance():.2f}\n")
-        
         if self.show_population and self.routes_population:
-            bests = sorted(self.routes_population, key=lambda r: r.calcul_distance())[:self.N_best]
-            self.text.insert(tk.END, f"\n{self.N_best} meilleures routes:\n")
+            bests = sorted(self.routes_population, key=lambda r: r.calcul_distance())[: self.N_best]
+            self.text.insert(tk.END, "N meilleures routes:\n")
             for i, r in enumerate(bests):
-                self.text.insert(tk.END, f"  {i+1}. dist={r.calcul_distance():.2f}\n")
-        
+                self.text.insert(tk.END, f" {i+1}. dist={r.calcul_distance():.2f} ordre={r.ordre}\n")
         self.text.see(tk.END)
 
     def toggle_population(self):
-        """Bascule l'affichage des N meilleures routes."""
         self.show_population = not self.show_population
         self._draw_all()
 
     def toggle_matrix(self):
-        """Bascule l'affichage de la matrice des coûts."""
         self.show_matrix = not self.show_matrix
         self._draw_all()
 
     def mainloop(self):
-        """Lance la boucle principale Tkinter."""
         self.root.mainloop()
 
 
-# ============================================================================
-# TESTS ET EXEMPLE
-# ============================================================================
+
 
 if __name__ == '__main__':
     import time
