@@ -11,7 +11,7 @@ from tkinter import scrolledtext
 # Constantes graphiques / environnement
 LARGEUR = 800
 HAUTEUR = 600
-NB_LIEUX = 1000
+NB_LIEUX = 10000
 RAYON_LIEU = 8
 N_BEST = 5  # par defaut pour l'affichage des N meilleures routes
 

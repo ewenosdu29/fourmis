@@ -11,7 +11,7 @@ from tkinter import scrolledtext
 # Constantes graphiques / environnement
 LARGEUR = 800
 HAUTEUR = 600
-NB_LIEUX = 101
+NB_LIEUX = 10000
 RAYON_LIEU = 8
 N_BEST = 5  # par defaut pour l'affichage des N meilleures routes
 
@@ -119,34 +119,34 @@ class Graph:
         self.liste_lieux = scaled
         self.nb_lieux = len(self.liste_lieux)
         self.matrice_od = None
-
+    
 
     def calcul_matrice_cout_od(self):
-        """Calcule la matrice symétrique des distances euclidiennes entre tous les lieux.
-        Stocke le résultat dans self.matrice_od (numpy.ndarray shape (n,n)).
-        Affiche également le temps d'exécution.
-        """
-        import time  # si ce n'est pas déjà importé
-        start_time = time.time()  # début du chronométrage
+        """Calcule la matrice symétrique des distances euclidiennes entre tous les lieux (numpy optimisé)."""
+        print("entrée matrice optimisé")
+        import time
+        start_time = time.time()
 
         n = self.nb_lieux
+        coords = np.array([[l.x, l.y] for l in self.liste_lieux], dtype=float)
+
+        # Matrice vide
         mat = np.zeros((n, n), dtype=float)
+
+        # On calcule seulement la moitié supérieure
         for i in range(n):
-            for j in range(i + 1, n):
-                d = self.liste_lieux[i].distance(self.liste_lieux[j])
-                mat[i, j] = d
-                mat[j, i] = d
+            diff = coords[i+1:] - coords[i]      # vecteurs vers les points suivants
+            dists = np.sqrt(np.sum(diff**2, axis=1))
+            mat[i, i+1:] = dists
+            mat[i+1:, i] = dists                 # symétrie
+
         self.matrice_od = mat
 
-        # affichage formaté désactivé
-        #print("Matrice des distances euclidiennes :")
-        #for row in mat:
-        #    print(" ".join(f"{val:6.2f}" for val in row))
-
-        end_time = time.time()  # fin du chronométrage
-        print(f"Temps de calcul de la matrice (boucles Python) : {end_time - start_time:.6f} secondes")
-
+        end_time = time.time()
+        print(f"Temps calcul matrice optimisé : {end_time - start_time:.6f} s")
+        print("sortie matrice optimisé")
         return mat
+
 
 
     def plus_proche_voisin(self, index: int, remaining: Optional[set] = None) -> int:
@@ -183,7 +183,6 @@ class Graph:
                 best_idx = j
 
         return best_idx
-
 
 
     def calcul_distance_route(self, ordre: List[int]) -> float:
