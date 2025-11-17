@@ -1,9 +1,10 @@
 import random
 import numpy as np
-from tsp_graph_init_lil import *
 import random
 from tkinter import *
 from tkinter import ttk
+import csv
+import time
 
 
 LARGEUR=800 
@@ -78,6 +79,26 @@ class Graph:
         voisin = min_index
 
         return voisin
+    
+    def construire_route_heuristique(self, depart=0):
+        """
+        Construit une route complète en utilisant l'heuristique du plus proche voisin
+        """
+        non_visites = set(range(self.nb_lieux))
+        route = [depart]
+        non_visites.remove(depart)
+        
+        current = depart
+        while non_visites:
+            # Trouver le plus proche voisin parmi les non visités
+            distances = [(i, self.matrice_od[current][i]) for i in non_visites]
+            plus_proche = min(distances, key=lambda x: x[1])[0]
+            route.append(plus_proche)
+            non_visites.remove(plus_proche)
+            current = plus_proche
+        
+        route.append(depart)  # Retour au point de départ
+        return route
 
 
 
@@ -169,7 +190,7 @@ class Display:
         # footer
         self.footer = Label(self.dp, text="text", font=("Arial", 10), bg="gray", fg="white")
         self.footer.grid(column=0, row=2, sticky="ew")
-        self.update_footer(0, "Inf")
+        self.update_footer(0, "Inf", 0, 0)
 
         self.dp.bind("<KeyPress>",self.key_event)
 
@@ -177,9 +198,13 @@ class Display:
         #affichage
         self.dp.mainloop()
         
-    def update_footer(self,iteration,best_distance):
-        self.footer.config(text=f"Itération {iteration + 1}: Meilleure distance trouvée: {best_distance}")
-        #self.dp.after(1000, self.update_footer) # J'ai laissé ca mais je vois pas à quoi ça sert (Flo)
+    def update_footer(self, iteration, best_distance, elapsed_time, initial_distance):
+        # Gérer les valeurs initiales et les types
+        if initial_distance == 0 or best_distance == "Inf" or best_distance == float('inf'):
+            self.footer.config(text=f"Initialisation en cours...")
+        else:
+            improvement = ((initial_distance - best_distance) / initial_distance) * 100
+            self.footer.config(text=f"Itération {iteration + 1}: Distance initiale: {initial_distance:.2f} | Meilleure distance ACO: {best_distance:.2f} | Amélioration: {improvement:.1f}% | Temps: {elapsed_time:.2f}s")
 
     def key_event(self, event):
         """Gestion des touches clavier"""
@@ -194,7 +219,7 @@ class Display:
             self.canvas.create_oval(node.x-5,node.y+5,node.x+5,node.y-5,fill="pink")
             self.canvas.create_text(node.x,node.y-10,text=node.nom)
 
-    def draw_route(self,nodes,route,pheromones,iteration,best_distance):
+    def draw_route(self,nodes,route,pheromones,iteration,best_distance,elapsed_time,initial_distance):
         self.canvas.delete('routes')
         self.canvas.delete('best_route')
         if self.display_best_route == 1:
@@ -222,7 +247,7 @@ class Display:
                         )
         
         self.canvas.update_idletasks()
-        self.update_footer(iteration,best_distance)
+        self.update_footer(iteration, best_distance, elapsed_time, initial_distance)
 
 
 class TSP_ACO:
@@ -239,8 +264,19 @@ class TSP_ACO:
         self.pheromones = np.ones((graph.nb_lieux, graph.nb_lieux))
         self.best_route = None
         self.best_distance = float('inf')
+        self.start_time = None  # Temps de départ
+        
+        # Calcul de la solution initiale avec l'heuristique du plus proche voisin
+        route_initiale = graph.construire_route_heuristique()
+        route_obj = Route(route_initiale)
+        graph.calcul_distance_route(route_obj)
+        self.initial_distance = route_obj.distance
+        print(f"Distance initiale (heuristique plus proche voisin): {self.initial_distance:.2f}")
     
     def run(self,iteration):
+        if self.start_time is None:
+            self.start_time = time.time()
+        
         if iteration !=self.iteration_max:
             routes = self.construct_solutions()
             self.update_pheromones(routes)
@@ -291,10 +327,19 @@ class TSP_ACO:
                 self.pheromones[b][a] += contribution
     
     def display_progress(self, iteration):
+        elapsed_time = time.time() - self.start_time
 
         if iteration ==self.iteration_max-1:
             display.display_best_route=1
-        display.draw_route(self.graph.liste_lieux, self.best_route, self.pheromones, iteration, self.best_distance)
+            # Afficher le résumé final dans la console
+            improvement = ((self.initial_distance - self.best_distance) / self.initial_distance) * 100
+            print(f"\n=== RÉSULTATS FINAUX ===")
+            print(f"Distance initiale (heuristique): {self.initial_distance:.2f}")
+            print(f"Meilleure distance (ACO): {self.best_distance:.2f}")
+            print(f"Amélioration: {improvement:.1f}%")
+            print(f"Temps d'exécution: {elapsed_time:.2f}s")
+        
+        display.draw_route(self.graph.liste_lieux, self.best_route, self.pheromones, iteration, self.best_distance, elapsed_time, self.initial_distance)
 
 
         
@@ -307,7 +352,3 @@ if __name__ == "__main__":
     display.draw_nodes(graph.liste_lieux)
     tsp.run(0)
     display.dp.mainloop()
-
-
-
-
