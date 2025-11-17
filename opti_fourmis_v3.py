@@ -186,7 +186,8 @@ class ACO_Optimized:
         beta: float = 2.0,
         rho: float = 0.5,
         Q: float = 100.0,
-        route_initiale = None
+        route_initiale=None,
+        temps_max: float = None     # ⬅️ NOUVEAU
     ):
         self.graph = graph
         self.nb_fourmis = nb_fourmis
@@ -196,6 +197,7 @@ class ACO_Optimized:
         self.rho = rho
         self.Q = Q
         self.route_initiale = route_initiale
+        self.temps_max = temps_max     # ⬅️ sauvegarde du temps maximum autorisé
        
         if self.graph.matrice_od is None:
             self.graph.calcul_matrice_cout_od()
@@ -205,7 +207,7 @@ class ACO_Optimized:
         # Initialisation phéromones
         self.pheromones = self._initialiser_pheromones(route_initiale)
        
-        # Heuristique 1/diste
+        # Heuristique 1/dist
         with np.errstate(divide='ignore', invalid='ignore'):
             self.heuristique = np.where(
                 self.graph.matrice_od > 0,
@@ -232,7 +234,7 @@ class ACO_Optimized:
         if route_initiale is not None:
             distance_init = route_initiale.calcul_distance()
             bonus = self.Q / distance_init
-            bonus_factor = max(1000, 50 * self.n)
+            bonus_factor = NB_LIEUX
 
             for i in range(len(route_initiale.ordre) - 1):
                 a = route_initiale.ordre[i]
@@ -298,11 +300,29 @@ class ACO_Optimized:
         self._update_tau_alpha()
    
     def optimiser(self, verbose: bool = True):
-        """Optimisation ACO standard (sans early stopping ni seuil)."""
+        """Optimisation ACO avec interruption possible par temps_max."""
+        
+        start_time = time.time()
+
         for iteration in range(int(self.nb_iterations)):
+
+            # ⏳ Vérification du temps au début de l'itération
+            if self.temps_max is not None:
+                if time.time() - start_time >= self.temps_max:
+                    if verbose:
+                        print(f"\n⏹️ Temps max dépassé ({self.temps_max}s). Retour du meilleur résultat.")
+                    return self.meilleure_route, self.meilleure_distance
 
             tours = []
             for _ in range(self.nb_fourmis):
+
+                # ⏳ Vérification même au milieu d'une iteration
+                if self.temps_max is not None:
+                    if time.time() - start_time >= self.temps_max:
+                        if verbose:
+                            print(f"\n⏹️ Temps max dépassé pendant la construction. Retour du meilleur résultat.")
+                        return self.meilleure_route, self.meilleure_distance
+
                 ordre = self._construire_solution()
                 distance = self.graph.calcul_distance_route(ordre)
                 tours.append((ordre, distance))
@@ -317,11 +337,10 @@ class ACO_Optimized:
            
             self.historique_distances.append(self.meilleure_distance)
            
-            if verbose and (iteration % 10 == 0 or iteration == self.nb_iterations - 1):
-                print(f"Itération {iteration+1}/{self.nb_iterations} - Meilleure distance: {self.meilleure_distance:.2f}")
+            if verbose:
+                print(f"Itération {iteration+1} - Meilleure distance: {self.meilleure_distance:.2f}")
        
         return self.meilleure_route, self.meilleure_distance
-
 
 
 
