@@ -78,16 +78,31 @@ class Graph:
         print(f"Temps calcul matrice optimisé : {end_time - start_time:.6f} s")
         print("sortie matrice optimisé")
         return mat
+
+    # def plus_proche_voisin(self, index: int, visited: Optional[List[bool]] = None) -> int:
+    #     if self.matrice_od is None:
+    #         self.calcul_matrice_cout_od()
+    #     row = self.matrice_od[index]
+    #     n = self.nb_lieux
+    #     best_idx = -1
+    #     best_d = float('inf')
+    #     for j in range(n):
+    #         if j == index:
+    #             continue
+    #         if visited is not None and visited[j]:
+    #             continue
+    #         d = row[j]
+    #         if d < best_d:
+    #             best_d = d
+    #             best_idx = j
+    #     return best_idx
     
     def plus_proche_voisin(self, index: int, remaining: Optional[set] = None) -> int:
-        """
-        Retourne l'indice du plus proche voisin du lieu `index` dans remaining.
+        """Retourne l'indice du plus proche voisin du lieu `index` dans remaining.
         Si remaining est None, on considère tous les lieux sauf index.
         """
         if self.matrice_od is None:
             self.calcul_matrice_cout_od()
-        
-        print(f"Points restants : {len(remaining)}")            
 
         row = self.matrice_od[index]
 
@@ -96,36 +111,12 @@ class Graph:
         distances = row[rem_list]
         best_idx = rem_list[np.argmin(distances)]
         return int(best_idx)
-
-    def plus_proche_voisin_adaptatif(self, index: int, remaining: set) -> int:
-        """
-        Version adaptative :
-        - Utilise la matrice OD si elle existe et est raisonnable en RAM.
-        - Utilise un calcul direct si nb_lieux > 10 000 pour éviter d'exploser la RAM.
-        """
-        best = None
-        best_dist = float("inf")
-
-        print(f"Points restants : {len(remaining)}")
-
-        li = self.liste_lieux[index]
-
-        for j in remaining:
-            lj = self.liste_lieux[j]
-            dx = li.x - lj.x
-            dy = li.y - lj.y
-            d = (dx*dx + dy*dy)**0.5
-            if d < best_dist:
-                best_dist = d
-                best = j
-
-        return best
+    
 
     def calcul_distance_route(self, ordre: List[int]) -> float:
         """VERSION OPTIMISÉE avec numpy vectorisé."""
         if not ordre:
             return 0.0
-        
         if self.matrice_od is None:
             self.calcul_matrice_cout_od()
         
@@ -139,6 +130,11 @@ class Graph:
     
 
     def route_heuristique(self, methode: Optional[str] = None) -> "Route":
+        if self.matrice_od is None:
+            self.calcul_matrice_cout_od()
+
+        if methode is None:
+            methode = "2opt" if self.nb_lieux < 100 else "ppv"
 
         print(f"\nMéthode utilisée : {methode.upper()} (nb_lieux = {self.nb_lieux})")
 
@@ -156,40 +152,6 @@ class Graph:
 
             ordre.append(0)
             return Route(self, ordre)
-        
-        if methode == "ppv_adaptatif":
-            n = self.nb_lieux
-            remaining = set(range(1, n))
-            ordre = [0]
-            current = 0
-            distance_totale = 0.0  # 👈 on initialise la distance
-
-            for _ in range(n - 1):
-                nxt = self.plus_proche_voisin_adaptatif(current, remaining)
-                # calcul direct de la distance entre current et nxt
-                li = self.liste_lieux[current]
-                lj = self.liste_lieux[nxt]
-                dx = li.x - lj.x
-                dy = li.y - lj.y
-                distance_totale += (dx*dx + dy*dy)**0.5
-
-                ordre.append(nxt)
-                remaining.remove(nxt)
-                current = nxt
-
-            # ajouter le retour au point de départ
-            li = self.liste_lieux[current]
-            lj = self.liste_lieux[0]
-            dx = li.x - lj.x
-            dy = li.y - lj.y
-            distance_totale += (dx*dx + dy*dy)**0.5
-
-            ordre.append(0)
-            route = Route(self, ordre)
-            # on stocke la distance calculée directement
-            route.distance_directe = distance_totale
-            return route
-
 
         elif methode == "2opt":
             route_init = Route(self)
@@ -224,8 +186,7 @@ class ACO_Optimized:
         beta: float = 2.0,
         rho: float = 0.5,
         Q: float = 100.0,
-        route_initiale=None,
-        temps_max: float = None     # ⬅️ NOUVEAU
+        route_initiale = None
     ):
         self.graph = graph
         self.nb_fourmis = nb_fourmis
@@ -235,14 +196,16 @@ class ACO_Optimized:
         self.rho = rho
         self.Q = Q
         self.route_initiale = route_initiale
-        self.temps_max = temps_max     # ⬅️ sauvegarde du temps maximum autorisé
+       
+        if self.graph.matrice_od is None:
+            self.graph.calcul_matrice_cout_od()
        
         self.n = self.graph.nb_lieux
 
         # Initialisation phéromones
         self.pheromones = self._initialiser_pheromones(route_initiale)
        
-        # Heuristique 1/dist
+        # Heuristique 1/diste
         with np.errstate(divide='ignore', invalid='ignore'):
             self.heuristique = np.where(
                 self.graph.matrice_od > 0,
@@ -269,7 +232,7 @@ class ACO_Optimized:
         if route_initiale is not None:
             distance_init = route_initiale.calcul_distance()
             bonus = self.Q / distance_init
-            bonus_factor = NB_LIEUX
+            bonus_factor = max(1000, 50 * self.n)
 
             for i in range(len(route_initiale.ordre) - 1):
                 a = route_initiale.ordre[i]
@@ -335,29 +298,11 @@ class ACO_Optimized:
         self._update_tau_alpha()
    
     def optimiser(self, verbose: bool = True):
-        """Optimisation ACO avec interruption possible par temps_max."""
-        
-        start_time = time.time()
-
+        """Optimisation ACO standard (sans early stopping ni seuil)."""
         for iteration in range(int(self.nb_iterations)):
-
-            # ⏳ Vérification du temps au début de l'itération
-            if self.temps_max is not None:
-                if time.time() - start_time >= self.temps_max:
-                    if verbose:
-                        print(f"\n⏹️ Temps max dépassé ({self.temps_max}s). Retour du meilleur résultat.")
-                    return self.meilleure_route, self.meilleure_distance
 
             tours = []
             for _ in range(self.nb_fourmis):
-
-                # ⏳ Vérification même au milieu d'une iteration
-                if self.temps_max is not None:
-                    if time.time() - start_time >= self.temps_max:
-                        if verbose:
-                            print(f"\n⏹️ Temps max dépassé pendant la construction. Retour du meilleur résultat.")
-                        return self.meilleure_route, self.meilleure_distance
-
                 ordre = self._construire_solution()
                 distance = self.graph.calcul_distance_route(ordre)
                 tours.append((ordre, distance))
@@ -372,11 +317,10 @@ class ACO_Optimized:
            
             self.historique_distances.append(self.meilleure_distance)
            
-            if verbose:
-                print(f"Itération {iteration+1} - Meilleure distance: {self.meilleure_distance:.2f}")
+            if verbose and (iteration % 10 == 0 or iteration == self.nb_iterations - 1):
+                print(f"Itération {iteration+1}/{self.nb_iterations} - Meilleure distance: {self.meilleure_distance:.2f}")
        
         return self.meilleure_route, self.meilleure_distance
-
 
 
 
@@ -440,6 +384,8 @@ class Affichage:
 
     def __init__(self, graph: Graph, routes_population: Optional[List[Route]] = None, group_name: str = "Groupe TSP"):
         self.graph = graph
+        if self.graph.matrice_od is None:
+            self.graph.calcul_matrice_cout_od()
         self.routes_population = routes_population or []
         self.best_route: Optional[Route] = None
         if self.routes_population:
@@ -515,46 +461,34 @@ class Affichage:
 
 if __name__ == '__main__':
    
-    nb_lieux = 10000 # Augmente pour tester les performances
+    methode_heuristique = "ppv"
+    nb_lieux = 5 # Augmente pour tester les performances
 
     # Création du graphe
     g = Graph(nb_lieux=nb_lieux)
 
     # ====== Phase 1 : Heuristique seule ======
-    if nb_lieux < 10000:
-        print("\n========== PHASE 1 : MÉTHODE HEURISTIQUE ==========")
-        t0 = time.time()
-        methode_heuristique = "ppv"
-        route_heur = g.route_heuristique(methode_heuristique)
-        t1 = time.time()
-        dist_heur = route_heur.calcul_distance()
-        temps_heur = t1 - t0
-        print(f"Distance obtenue avec {methode_heuristique.upper()} : {dist_heur:.2f}")
-        print(f"Temps d'exécution ({methode_heuristique.upper()} seul) : {temps_heur:.3f} s")
-    else:
-        print("\n========== PHASE 1 : MÉTHODE HEURISTIQUE ==========")
-        t0 = time.time()
-        methode_heuristique = "ppv_adaptatif"
-        route_heur = g.route_heuristique(methode_heuristique)
-        t1 = time.time()
-        dist_heur = route_heur.distance_directe
-        temps_heur = t1 - t0
-        print(f"Distance obtenue avec {methode_heuristique.upper()} : {dist_heur:.2f}")
-        print(f"Temps d'exécution ({methode_heuristique.upper()} seul) : {temps_heur:.3f} s")
+    print("\n========== PHASE 1 : MÉTHODE HEURISTIQUE ==========")
+    t0 = time.time()
+    route_heur = g.route_heuristique(methode_heuristique)
+    t1 = time.time()
+    dist_heur = route_heur.calcul_distance()
+    temps_heur = t1 - t0
+    print(f"Distance obtenue avec {methode_heuristique.upper()} : {dist_heur:.2f}")
+    print(f"Temps d'exécution ({methode_heuristique.upper()} seul) : {temps_heur:.3f} s")
 
     # ====== Phase 2 : ACO OPTIMISÉ avec heuristique ======
     print("\n========== PHASE 2 : ACO OPTIMISÉ (avec heuristique) ==========")
     t2 = time.time()
     aco = ACO_Optimized(
         graph = g,
-        nb_fourmis = 200,
-        nb_iterations = 10000,
+        nb_fourmis = min(NB_LIEUX, 200),
+        nb_iterations = 200,
         alpha = 1.0,
         beta = 4.0,
         rho = 0.3,
         Q = 100.0,
         route_initiale = route_heur,
-        temps_max = 180
     )
 
     meilleur_ordre, meilleure_distance = aco.optimiser(verbose=True)
