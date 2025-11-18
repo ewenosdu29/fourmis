@@ -534,6 +534,7 @@ class Affichage(tk.Tk):
         self.text_zone = tk.Text(self, height=5, width=80, bg='lightyellow')
         self.text_zone.pack()
 
+        self.simple_affichage = self.graph.nb_lieux > 200
         self.affiche_pheromones = False
         self.pheromones = None
         self.route = None
@@ -545,6 +546,9 @@ class Affichage(tk.Tk):
     # AFFICHAGE DES LIEUX ET ROUTE
     # ------------------------------
     def afficher_lieux(self, route):
+        if self.simple_affichage:
+            return
+        
         self.canvas.delete("lieux")
         self.canvas.delete("ordres")
         for ordre_idx, lieu_idx in enumerate(route.ordre[:-1]):
@@ -609,7 +613,6 @@ class Affichage(tk.Tk):
 
 
 
-
 # =========================================
 # PROGRAMME PRINCIPAL
 # =========================================
@@ -619,7 +622,7 @@ if __name__ == '__main__':
     #   CONFIGURATION
     # ===============================
     csv_file = None  # <-- mettre None pour générer des randoms
-    nb_lieux = 100   # utilisé uniquement si csv_file=None
+    nb_lieux = 40000   # utilisé uniquement si csv_file=None
     tps_max = 40
 
     # Création du graphe
@@ -636,7 +639,7 @@ if __name__ == '__main__':
     else:
         methode_heuristique = "ppv_sparse_grille"
         # calcul de la sparse matrix avec grille si nécessaire
-        g.calcul_matrice_sparse_grille(k_voisins=100)
+        g.calcul_matrice_sparse_grille(k_voisins=20)
 
     print(f"\n========== PHASE 1 : MÉTHODE HEURISTIQUE ({methode_heuristique.upper()}) ==========")
     t0 = time.time()
