@@ -13,7 +13,7 @@ from tkinter import scrolledtext
 FICHIER_CSV = "graph_200k.csv"
 LARGEUR = 1000
 HAUTEUR = 800
-NB_LIEUX = 10000   # 200k Villes
+NB_LIEUX = 200000   # 200k Villes
 SEUIL_BIG_DATA = 3000 # Au-delà, on active la grille spatiale
 
 # ============================================================
@@ -41,7 +41,7 @@ class Graph:
         self.liste_lieux = []
         self.matrice_od = None 
         self.is_sparse = False
-        self.k_voisins = 20 
+        self.k_voisins = 10 
 
     def charger_graph(self, fichier_csv):
         self.liste_lieux = []
