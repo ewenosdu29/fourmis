@@ -8,15 +8,16 @@ import tkinter as tk
 from tkinter import scrolledtext
 
 # ============================================================
-# CONFIGURATION
+# 1. CONFIGURATION
 # ============================================================
 FICHIER_CSV = "graph_200k.csv"
 LARGEUR = 1000
 HAUTEUR = 800
-NB_LIEUX = 200000  # MODE BIG DATA ACTIVÉ
+NB_LIEUX = 10000   # 200k Villes
+SEUIL_BIG_DATA = 3000 # Au-delà, on active la grille spatiale
 
 # ============================================================
-# CLASSE LIEU
+# 2. CLASSE LIEU
 # ============================================================
 class Lieu:
     def __init__(self, x, y, nom):
@@ -33,20 +34,18 @@ class Lieu:
         return f"Lieu({self.nom})"
 
 # ============================================================
-# CLASSE GRAPH (Optimisée Grille Spatiale pour RAM)
+# 3. CLASSE GRAPH (Optimisation RAM via Grille Spatiale)
 # ============================================================
 class Graph:
     def __init__(self):
         self.liste_lieux = []
-        # matrice_od stockera un tuple (indices_voisins, distances_voisins)
-        # pour éviter de saturer la RAM avec une matrice pleine
         self.matrice_od = None 
         self.is_sparse = False
-        self.k_voisins = 40 # Nombre de voisins regardés par les fourmis
+        self.k_voisins = 20 
 
     def charger_graph(self, fichier_csv):
         self.liste_lieux = []
-        print(f"Chargement de {fichier_csv}...")
+        print(f"Lecture de {fichier_csv}...")
         try:
             with open(fichier_csv, 'r', newline='', encoding='utf-8') as csvfile:
                 reader = csv.DictReader(csvfile)
@@ -60,104 +59,107 @@ class Graph:
                     except: continue
             print(f"Graph chargé: {len(self.liste_lieux)} lieux.")
         except FileNotFoundError:
-            print("Fichier absent. Génération aléatoire...")
             self.generer_aleatoire()
 
     def generer_aleatoire(self):
-        print(f"Génération aléatoire de {NB_LIEUX} lieux...")
-        self.liste_lieux = []
-        # Génération vectorisée rapide
+        print(f"Génération interne de {NB_LIEUX} lieux...")
         coords = np.random.uniform(10, min(LARGEUR, HAUTEUR)-10, size=(NB_LIEUX, 2))
-        for i in range(NB_LIEUX):
-            self.liste_lieux.append(Lieu(coords[i][0], coords[i][1], str(i)))
+        self.liste_lieux = [Lieu(c[0], c[1], str(i)) for i, c in enumerate(coords)]
 
     def calcul_matrice_cout_od(self):
-        """
-        Prépare les distances. Si N est grand, utilise une Grille Spatiale
-        pour trouver les voisins sans calculer la matrice géante (Crash RAM).
-        """
         n = len(self.liste_lieux)
         coords = np.array([[l.x, l.y] for l in self.liste_lieux], dtype=np.float32)
         
-        if n <= 2000:
-            print("Calcul Matrice Complète (Mode Petit Graphe)...")
+        if n <= SEUIL_BIG_DATA:
+            print("Mode Petit Graphe: Matrice complète...")
             diff = coords[:, np.newaxis, :] - coords[np.newaxis, :, :]
             self.matrice_od = np.sqrt(np.sum(diff**2, axis=-1))
             self.is_sparse = False
         else:
-            print(f"⚠️ MODE BIG DATA ({n} lieux). Indexation spatiale en cours...")
+            print(f"⚠️ Mode BIG DATA ({n} lieux). Optimisation Grille Spatiale...")
             self.is_sparse = True
+            self.matrice_od = self._calculer_voisins_grille(coords, n)
+
+    def _calculer_voisins_grille(self, coords, n):
+        """Grille spatiale manuelle pour éviter Scipy et le crash RAM."""
+        t0 = time.time()
+        grid_size = 50 
+        grid = {}
+        
+        print("   -> Remplissage de la grille...")
+        indices_grid_x = (coords[:, 0] // grid_size).astype(int)
+        indices_grid_y = (coords[:, 1] // grid_size).astype(int)
+        
+        for idx in range(n):
+            gx, gy = indices_grid_x[idx], indices_grid_y[idx]
+            if (gx, gy) not in grid: grid[(gx, gy)] = []
+            grid[(gx, gy)].append(idx)
             
-            # 1. Grille de hachage (Spatial Hashing)
-            # Permet de trouver les voisins sans tout parcourir
-            grid_size = 50 
-            grid = {}
-            for idx, (x, y) in enumerate(coords):
-                gx, gy = int(x // grid_size), int(y // grid_size)
-                if (gx, gy) not in grid: grid[(gx, gy)] = []
-                grid[(gx, gy)].append(idx)
-                
-            # 2. Construction de la liste des voisins (Candidate List)
-            indices_voisins = np.zeros((n, self.k_voisins), dtype=int)
-            dists_voisins = np.zeros((n, self.k_voisins), dtype=np.float32)
+        print("   -> Recherche des voisins proches...")
+        indices_voisins = np.zeros((n, self.k_voisins), dtype=int)
+        dists_voisins = np.zeros((n, self.k_voisins), dtype=np.float32)
+        offsets = [(-1,-1), (-1,0), (-1,1), (0,-1), (0,0), (0,1), (1,-1), (1,0), (1,1)]
+        
+        for idx in range(n):
+            if idx % 10000 == 0: print(f"      Traitement {idx}/{n}...", end="\r")
+            gx, gy = indices_grid_x[idx], indices_grid_y[idx]
+            candidats = []
             
-            t0 = time.time()
-            for idx, (x, y) in enumerate(coords):
-                if idx % 10000 == 0: print(f"   Indexation {idx}/{n}...", end="\r")
-                
-                gx, gy = int(x // grid_size), int(y // grid_size)
-                candidats = []
-                
-                # Recherche dans les cases adjacentes
-                for dx in range(-1, 2):
-                    for dy in range(-1, 2):
-                        key = (gx+dx, gy+dy)
-                        if key in grid: candidats.extend(grid[key])
-                
-                candidats = np.array(candidats)
-                # Fallback si case vide (rare)
-                if len(candidats) <= self.k_voisins:
-                    candidats = np.arange(n) 
-                    
-                pts_cand = coords[candidats]
-                # Distance euclidienne vectorisée
-                dists = np.sqrt(np.sum((pts_cand - coords[idx])**2, axis=1))
-                
-                # On prend les K+1 meilleurs
-                nb_take = min(len(dists)-1, self.k_voisins + 1)
-                # argpartition est O(N), beaucoup plus rapide que sort
-                k_best_idx = np.argpartition(dists, nb_take)[:nb_take+1]
-                
-                # Tri propre des K meilleurs
-                sorted_local = k_best_idx[np.argsort(dists[k_best_idx])]
-                
-                # Récupération des indices globaux et distances
-                raw_idx = candidats[sorted_local]
-                raw_dst = dists[sorted_local]
-                
-                # Masque pour s'exclure soi-même (distance 0)
-                mask = (raw_idx != idx)
-                final_idx = raw_idx[mask][:self.k_voisins]
-                final_dst = raw_dst[mask][:self.k_voisins]
-                
-                # Remplissage
-                nb = len(final_idx)
-                indices_voisins[idx, :nb] = final_idx
-                dists_voisins[idx, :nb] = final_dst
-                
-            self.matrice_od = (indices_voisins, dists_voisins)
-            print(f"\n✅ Indexation terminée en {time.time()-t0:.1f}s.")
+            # Récupération des candidats dans les cases voisines
+            for dx, dy in offsets:
+                key = (gx+dx, gy+dy)
+                if key in grid: candidats.extend(grid[key])
+            
+            cands_idx = np.array(candidats, dtype=int)
+            
+            # Fallback si pas assez de voisins
+            if len(cands_idx) <= self.k_voisins:
+                 manquants = np.random.randint(0, n, self.k_voisins)
+                 cands_idx = np.concatenate((cands_idx, manquants))
+
+            # Calcul distance locale
+            pts_cands = coords[cands_idx]
+            pt_curr = coords[idx]
+            d = np.sqrt(np.sum((pts_cands - pt_curr)**2, axis=1))
+            
+            # Tri partiel (Top K)
+            k = min(len(d)-1, self.k_voisins + 1) 
+            partition_idx = np.argpartition(d, k)[:k]
+            best_local_indices = partition_idx[np.argsort(d[partition_idx])]
+            
+            raw_indices = cands_idx[best_local_indices]
+            raw_dists = d[best_local_indices]
+            
+            # Masque pour s'exclure soi-même
+            mask = raw_indices != idx
+            final_indices = raw_indices[mask][:self.k_voisins]
+            final_dists = raw_dists[mask][:self.k_voisins]
+            
+            # Remplissage
+            count = len(final_indices)
+            indices_voisins[idx, :count] = final_indices
+            dists_voisins[idx, :count] = final_dists
+
+        print(f"\n✅ Indexation terminée en {time.time()-t0:.1f}s")
+        return (indices_voisins, dists_voisins)
 
     def calcul_distance_route(self, route):
-        # Calcul optimisé avec numpy
         coords = np.array([[l.x, l.y] for l in self.liste_lieux], dtype=np.float32)
         ordre = np.array(route.ordre)
         pts_a = coords[ordre[:-1]]
         pts_b = coords[ordre[1:]]
         return float(np.sum(np.sqrt(np.sum((pts_a - pts_b)**2, axis=1))))
 
+    def plus_proche_voisin(self, index):
+        if self.is_sparse:
+            return self.matrice_od[0][index][0]
+        else:
+            dists = self.matrice_od[index].copy()
+            dists[index] = np.inf
+            return np.argmin(dists)
+
 # ============================================================
-# CLASSE ROUTE
+# 4. CLASSE ROUTE
 # ============================================================
 class Route:
     def __init__(self, graph, ordre=None):
@@ -171,43 +173,42 @@ class Route:
         if self.ordre[-1] != 0: self.ordre.append(0)
 
 # ============================================================
-# CLASSE AFFICHAGE
+# 5. CLASSE AFFICHAGE
 # ============================================================
 class Affichage:
-    def __init__(self, graph, group_name="TSP ACO"):
+    def __init__(self, graph, group_name="TSP Single Core"):
         self.graph = graph
         self.root = tk.Tk()
-        self.root.title(f"{group_name} ({len(graph.liste_lieux)} villes)")
+        self.root.title(f"{group_name} - {len(graph.liste_lieux)} Lieux")
         self.canvas = tk.Canvas(self.root, width=LARGEUR, height=HAUTEUR, bg="black")
         self.canvas.pack()
         self.text_area = scrolledtext.ScrolledText(self.root, height=8)
         self.text_area.pack(fill=tk.BOTH)
         self.root.bind('<Escape>', lambda e: self.root.destroy())
         
-        # Pas de ronds si trop de villes (sinon lag)
         if len(graph.liste_lieux) < 2000:
             self.dessiner_lieux()
 
     def dessiner_lieux(self):
+        self.canvas.delete("lieu")
         for l in self.graph.liste_lieux:
-            self.canvas.create_oval(l.x-2, l.y-2, l.x+2, l.y+2, fill="gray", outline="")
+            self.canvas.create_oval(l.x-2, l.y-2, l.x+2, l.y+2, fill="gray", tags="lieu")
 
-    def afficher_route(self, route, color="cyan"):
+    def afficher_route(self, route, couleur="cyan"):
         self.canvas.delete("route")
-        # Sampling pour affichage fluide si > 5000 points
+        # Sampling pour éviter freeze Tkinter
+        n = len(route.ordre)
         step = 1
-        if len(route.ordre) > 10000: step = 20
-        if len(route.ordre) > 100000: step = 100
+        if n > 5000: step = 10
+        if n > 50000: step = 100
         
-        pts = []
-        coords = [[l.x, l.y] for l in self.graph.liste_lieux]
         indices = route.ordre[::step]
         if indices[-1] != 0: indices.append(0)
         
-        for idx in indices:
-            pts.extend(coords[idx])
-            
-        self.canvas.create_line(pts, fill=color, width=1, tags="route")
+        coords = np.array([[l.x, l.y] for l in self.graph.liste_lieux], dtype=np.float32)
+        pts = coords[indices].flatten().tolist()
+        
+        self.canvas.create_line(pts, fill=couleur, width=1, tags="route")
         self.root.update()
 
     def log(self, msg):
@@ -215,10 +216,10 @@ class Affichage:
         self.text_area.see(tk.END)
 
 # ============================================================
-# CLASSE TSP_ACO (Algorithme)
+# 6. CLASSE TSP_ACO (SINGLE THREAD)
 # ============================================================
 class TSP_ACO:
-    def __init__(self, graph, affichage, nb_fourmis=20, alpha=1.0, beta=3.0, rho=0.1):
+    def __init__(self, graph, affichage, nb_fourmis=10, alpha=1.0, beta=3.0, rho=0.1):
         self.graph = graph
         self.app = affichage
         self.n = len(graph.liste_lieux)
@@ -228,80 +229,71 @@ class TSP_ACO:
         self.rho = rho
         self.Q = 1000.0
         
-        # Initialisation Phéromones (Matrice Creuse)
-        # On stocke une valeur pour chaque voisin connu
-        self.k = self.graph.k_voisins
-        self.pheromones = np.ones((self.n, self.k), dtype=np.float32) * 0.5
-        
-        # Pré-calcul Heuristique (1/d) pour les voisins
-        indices, distances = self.graph.matrice_od
-        with np.errstate(divide='ignore'):
-            self.heuristique = 1.0 / (distances + 1e-9)
+        # Init Phéromones
+        if self.graph.is_sparse:
+            self.k = self.graph.k_voisins
+            self.pheromones = np.ones((self.n, self.k), dtype=np.float32) * 0.1
+            indices, distances = self.graph.matrice_od
+            with np.errstate(divide='ignore'):
+                self.heuristique = 1.0 / (distances + 1e-9)
+        else:
+            self.pheromones = np.ones((self.n, self.n)) * 0.1
+            with np.errstate(divide='ignore'):
+                self.heuristique = 1.0 / (self.graph.matrice_od + 1e-9)
 
-    def get_ppv_route(self):
-        """Construit la route Plus Proche Voisin."""
+    def get_greedy_route(self):
+        """Baseline PPV."""
         visite = np.zeros(self.n, dtype=bool)
         tour = np.zeros(self.n + 1, dtype=int)
         curr = 0
         visite[0] = True
-        
-        # On utilise la matrice creuse des voisins
-        voisins_idx, _ = self.graph.matrice_od
+        indices_voisins, _ = self.graph.matrice_od
         
         for i in range(1, self.n):
-            local_neighbors = voisins_idx[curr]
+            local = indices_voisins[curr]
             found = False
-            for v in local_neighbors:
+            for v in local:
                 if not visite[v]:
-                    curr = v
-                    found = True
-                    break
-            if not found: # Secours aléatoire
+                    curr = v; found = True; break
+            if not found:
                 while True:
                     cand = random.randint(0, self.n-1)
-                    if not visite[cand]:
-                        curr = cand
-                        break
+                    if not visite[cand]: curr = cand; break
             tour[i] = curr
             visite[curr] = True
-            
         return list(tour)
 
     def construire_solution(self):
-        """Une fourmi construit un chemin (Logique ACO)."""
+        """Une fourmi construit un chemin."""
         tour = [0]
         visite = set([0])
         curr = 0
-        
         indices_voisins, _ = self.graph.matrice_od
         
         for _ in range(self.n - 1):
             candidats_idx = indices_voisins[curr]
             
-            # Filtre non visités
-            valid_local_idx = []
-            valid_real_idx = []
-            for k, real_idx in enumerate(candidats_idx):
-                if real_idx not in visite:
-                    valid_local_idx.append(k)
-                    valid_real_idx.append(real_idx)
+            # Filtre
+            valid_tuple = [(k, idx) for k, idx in enumerate(candidats_idx) if idx not in visite]
             
-            if valid_real_idx:
-                # Formule ACO
-                ph = self.pheromones[curr][valid_local_idx]
-                he = self.heuristique[curr][valid_local_idx]
+            if valid_tuple:
+                valid_local = [t[0] for t in valid_tuple]
+                valid_real = [t[1] for t in valid_tuple]
+                
+                ph = self.pheromones[curr][valid_local]
+                he = self.heuristique[curr][valid_local]
                 probas = (ph ** self.alpha) * (he ** self.beta)
                 
-                # Choix pondéré (Argmax avec bruit pour vitesse)
-                choice = np.argmax(probas * np.random.uniform(0.8, 1.2, size=len(probas)))
-                nxt = valid_real_idx[choice]
+                # Choix rapide (Argmax stochastique)
+                if random.random() < 0.9:
+                    nxt = valid_real[np.argmax(probas * np.random.uniform(0.8, 1.2, size=len(probas)))]
+                else:
+                    nxt = valid_real[random.randint(0, len(valid_real)-1)]
             else:
                 # Secours
                 while True:
                     cand = random.randint(0, self.n-1)
-                    if cand not in visite:
-                        nxt = cand
-                        break
+                    if cand not in visite: nxt = cand; break
             
             tour.append(nxt)
             visite.add(nxt)
@@ -310,39 +302,36 @@ class TSP_ACO:
         tour.append(0)
         return tour
 
-    def resoudre(self, nb_iter=100):
-        # 1. CALCUL ET AFFICHAGE PPV (DEMANDÉ)
+    def resoudre(self, nb_iter=50):
+        # 1. Calcul Baseline
         print("--- CALCUL PPV ---")
         t0 = time.time()
-        ppv_ordre = self.get_ppv_route()
-        t1 = time.time()
+        ppv_ordre = self.get_greedy_route()
+        t_ppv = time.time() - t0
         
         ppv_route = Route(self.graph, ppv_ordre)
         ppv_dist = self.graph.calcul_distance_route(ppv_route)
         
-        print(f"⏱️  Temps PPV : {t1-t0:.4f} s")
+        print(f"⏱️ Temps PPV : {t_ppv:.4f} s")
         print(f"📏 Distance PPV : {ppv_dist:.2f}")
-        self.app.log(f"Base PPV: {ppv_dist:.2f} ({t1-t0:.2f}s)")
+        self.app.log(f"Base PPV: {ppv_dist:.2f} ({t_ppv:.2f}s)")
         self.app.afficher_route(ppv_route, "red")
         
-        # Injection Phéromones sur le PPV
+        # Injection Phéromones
+        indices_voisins, _ = self.graph.matrice_od
         arr_t = np.array(ppv_ordre)
-        voisins_idx, _ = self.graph.matrice_od
         for i in range(self.n):
             u, v = arr_t[i], arr_t[i+1]
-            # On trouve l'index local de v chez u
-            # np.where sur petit tableau (taille 40) est rapide
-            idx = np.where(voisins_idx[u] == v)[0]
+            idx = np.where(indices_voisins[u] == v)[0]
             if idx.size > 0: self.pheromones[u, idx[0]] += 5.0
 
-        # 2. BOUCLE ACO
         best_dist = ppv_dist
         best_route = ppv_route
-        start_t = time.time()
         
+        # 2. Boucle ACO (Séquentielle)
         for it in range(nb_iter):
             routes = []
-            # Lancement fourmis
+            # Les fourmis partent les unes après les autres
             for k in range(self.nb_fourmis):
                 o = self.construire_solution()
                 r = Route(self.graph, o)
@@ -355,16 +344,15 @@ class TSP_ACO:
                     self.app.log(f"RECORD: {d:.2f}")
                     self.app.afficher_route(best_route, "cyan")
             
-            # Evaporation
+            # Evaporation & Renforcement
             self.pheromones *= (1 - self.rho)
-            
-            # Renforcement
             for o, d in routes:
                 delta = self.Q / d
-                for i in range(self.n):
-                    u, v = o[i], o[i+1]
-                    idx = np.where(voisins_idx[u] == v)[0]
-                    if idx.size > 0: self.pheromones[u, idx[0]] += delta
+                if d <= best_dist * 1.05:
+                    for i in range(self.n):
+                        u, v = o[i], o[i+1]
+                        idx = np.where(indices_voisins[u] == v)[0]
+                        if idx.size > 0: self.pheromones[u, idx[0]] += delta
             
             self.app.log(f"Iter {it+1} | Best: {best_dist:.0f}")
             self.app.root.update()
@@ -374,13 +362,13 @@ class TSP_ACO:
 # ============================================================
 if __name__ == "__main__":
     g = Graph()
-    g.charger_graph(FICHIER_CSV)
+    g.charger_graph(FICHIER_CSV) # Créera le fichier si absent
     g.calcul_matrice_cout_od()
     
     app = Affichage(g)
     
-    # Peu de fourmis pour aller vite sur 200k
+    # On limite le nombre de fourmis car on est en monocoeur
     solver = TSP_ACO(g, app, nb_fourmis=10)
     
-    app.root.after(100, lambda: solver.resoudre(nb_iter=500))
+    app.root.after(100, lambda: solver.resoudre(nb_iter=1000))
     app.root.mainloop()
