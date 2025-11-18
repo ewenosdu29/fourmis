@@ -1,10 +1,9 @@
 import random
 import numpy as np
 import random
+from tsp_graph_init_lil import *
 from tkinter import *
 from tkinter import ttk
-import csv
-import time
 
 
 LARGEUR=800 
@@ -40,29 +39,31 @@ class Graph:
         self.calcul_matrice_cout_od()
         self.nb_lieux = NB_LIEUX
 
-    def calcul_matrice_cout_od (self, nb_lieux = NB_LIEUX) :
-        """
-        calculer ou importer une matrice de distances entre chaque lieu du graphe et 
-        stocker ce résultat dans une variable de classe matrice_od.
+    def calcul_matrice_cout_od(self):
+        """Calcule la matrice symétrique des distances euclidiennes entre tous les lieux (numpy optimisé)."""
+        print("entrée matrice optimisé")
+        import time
+        start_time = time.time()
 
-        des coordonnées qui devront être adaptées pour tenir dans un espace défini grâce à deux constantes LARGEUR=800 et HAUTEUR=600. 
+        n = self.nb_lieux
+        coords = np.array([[l.x, l.y] for l in self.liste_lieux], dtype=float)
 
-        """
+        # Matrice vide
+        mat = np.zeros((n, n), dtype=float)
 
-        # Definition de la matrice
-        self.matrice_od = [[0] * nb_lieux for _ in range(nb_lieux)]
+        # On calcule seulement la moitié supérieure
+        for i in range(n):
+            diff = coords[i+1:] - coords[i]      # vecteurs vers les points suivants
+            dists = np.sqrt(np.sum(diff**2, axis=1))
+            mat[i, i+1:] = dists
+            mat[i+1:, i] = dists                 # symétrie
 
-        #Remplissage avec les distances entre les lieux
+        self.matrice_od = mat
 
-        for i in range(nb_lieux):
-            lieu1 = self.liste_lieux[i]
-            for j in range(nb_lieux):
-                lieu2 = self.liste_lieux[j]
-                if i != j:
-                    distance_pt = lieu1.distance(lieu2)
-                    self.matrice_od[i][j] = distance_pt
-
-        return self.matrice_od
+        end_time = time.time()
+        print(f"Temps calcul matrice optimisé : {end_time - start_time:.6f} s")
+        print("sortie matrice optimisé")
+        return mat
 
     def plus_proche_voisin(self, index_lieu):
         """"
@@ -79,26 +80,6 @@ class Graph:
         voisin = min_index
 
         return voisin
-    
-    def construire_route_heuristique(self, depart=0):
-        """
-        Construit une route complète en utilisant l'heuristique du plus proche voisin
-        """
-        non_visites = set(range(self.nb_lieux))
-        route = [depart]
-        non_visites.remove(depart)
-        
-        current = depart
-        while non_visites:
-            # Trouver le plus proche voisin parmi les non visités
-            distances = [(i, self.matrice_od[current][i]) for i in non_visites]
-            plus_proche = min(distances, key=lambda x: x[1])[0]
-            route.append(plus_proche)
-            non_visites.remove(plus_proche)
-            current = plus_proche
-        
-        route.append(depart)  # Retour au point de départ
-        return route
 
 
 
@@ -190,7 +171,7 @@ class Display:
         # footer
         self.footer = Label(self.dp, text="text", font=("Arial", 10), bg="gray", fg="white")
         self.footer.grid(column=0, row=2, sticky="ew")
-        self.update_footer(0, "Inf", 0, 0)
+        self.update_footer(0, "Inf")
 
         self.dp.bind("<KeyPress>",self.key_event)
 
@@ -198,13 +179,9 @@ class Display:
         #affichage
         self.dp.mainloop()
         
-    def update_footer(self, iteration, best_distance, elapsed_time, initial_distance):
-        # Gérer les valeurs initiales et les types
-        if initial_distance == 0 or best_distance == "Inf" or best_distance == float('inf'):
-            self.footer.config(text=f"Initialisation en cours...")
-        else:
-            improvement = ((initial_distance - best_distance) / initial_distance) * 100
-            self.footer.config(text=f"Itération {iteration + 1}: Distance initiale: {initial_distance:.2f} | Meilleure distance ACO: {best_distance:.2f} | Amélioration: {improvement:.1f}% | Temps: {elapsed_time:.2f}s")
+    def update_footer(self,iteration,best_distance):
+        self.footer.config(text=f"Itération {iteration + 1}: Meilleure distance trouvée: {best_distance}")
+        #self.dp.after(1000, self.update_footer) # J'ai laissé ca mais je vois pas à quoi ça sert (Flo)
 
     def key_event(self, event):
         """Gestion des touches clavier"""
@@ -219,7 +196,7 @@ class Display:
             self.canvas.create_oval(node.x-5,node.y+5,node.x+5,node.y-5,fill="pink")
             self.canvas.create_text(node.x,node.y-10,text=node.nom)
 
-    def draw_route(self,nodes,route,pheromones,iteration,best_distance,elapsed_time,initial_distance):
+    def draw_route(self,nodes,route,pheromones,iteration,best_distance):
         self.canvas.delete('routes')
         self.canvas.delete('best_route')
         if self.display_best_route == 1:
@@ -247,7 +224,7 @@ class Display:
                         )
         
         self.canvas.update_idletasks()
-        self.update_footer(iteration, best_distance, elapsed_time, initial_distance)
+        self.update_footer(iteration,best_distance)
 
 
 class TSP_ACO:
@@ -264,19 +241,8 @@ class TSP_ACO:
         self.pheromones = np.ones((graph.nb_lieux, graph.nb_lieux))
         self.best_route = None
         self.best_distance = float('inf')
-        self.start_time = None  # Temps de départ
-        
-        # Calcul de la solution initiale avec l'heuristique du plus proche voisin
-        route_initiale = graph.construire_route_heuristique()
-        route_obj = Route(route_initiale)
-        graph.calcul_distance_route(route_obj)
-        self.initial_distance = route_obj.distance
-        print(f"Distance initiale (heuristique plus proche voisin): {self.initial_distance:.2f}")
     
     def run(self,iteration):
-        if self.start_time is None:
-            self.start_time = time.time()
-        
         if iteration !=self.iteration_max:
             routes = self.construct_solutions()
             self.update_pheromones(routes)
@@ -327,19 +293,10 @@ class TSP_ACO:
                 self.pheromones[b][a] += contribution
     
     def display_progress(self, iteration):
-        elapsed_time = time.time() - self.start_time
 
         if iteration ==self.iteration_max-1:
             display.display_best_route=1
-            # Afficher le résumé final dans la console
-            improvement = ((self.initial_distance - self.best_distance) / self.initial_distance) * 100
-            print(f"\n=== RÉSULTATS FINAUX ===")
-            print(f"Distance initiale (heuristique): {self.initial_distance:.2f}")
-            print(f"Meilleure distance (ACO): {self.best_distance:.2f}")
-            print(f"Amélioration: {improvement:.1f}%")
-            print(f"Temps d'exécution: {elapsed_time:.2f}s")
-        
-        display.draw_route(self.graph.liste_lieux, self.best_route, self.pheromones, iteration, self.best_distance, elapsed_time, self.initial_distance)
+        display.draw_route(self.graph.liste_lieux, self.best_route, self.pheromones, iteration, self.best_distance)
 
 
         
@@ -352,3 +309,7 @@ if __name__ == "__main__":
     display.draw_nodes(graph.liste_lieux)
     tsp.run(0)
     display.dp.mainloop()
+
+
+
+

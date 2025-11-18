@@ -34,14 +34,33 @@ class Lieu:
 
 class Graph:
     """Graphe de lieux."""
-
-    def __init__(self, nb_lieux: int = NB_LIEUX, largeur: int = LARGEUR, hauteur: int = HAUTEUR):
+    def __init__(self, nb_lieux: int = NB_LIEUX, largeur: int = LARGEUR, hauteur: int = HAUTEUR, csv_file: Optional[str] = None):
         self.largeur = largeur
         self.hauteur = hauteur
         self.nb_lieux = int(nb_lieux)
         self.liste_lieux: List[Lieu] = []
         self.matrice_od: Optional[np.ndarray] = None
-        self.generer_lieux_aleatoires(self.nb_lieux)
+
+        if csv_file is not None:
+            print(f"Chargement des lieux depuis le fichier CSV : {csv_file}")
+            self.charger_lieux_depuis_csv(csv_file)
+        else:
+            print(f"Génération de {nb_lieux} lieux aléatoires")
+            self.generer_lieux_aleatoires(self.nb_lieux)
+
+    def charger_lieux_depuis_csv(self, chemin_fichier: str):
+        """Charge les lieux depuis un fichier CSV avec en-tête x,y"""
+        self.liste_lieux = []
+        with open(chemin_fichier, newline='') as csvfile:
+            reader = csv.reader(csvfile)
+            next(reader)  # sauter l'en-tête
+            for i, row in enumerate(reader):
+                x = float(row[0])
+                y = float(row[1])
+                self.liste_lieux.append(Lieu(x, y, name=str(i)))
+        self.nb_lieux = len(self.liste_lieux)
+        self.matrice_od = None
+
 
     def generer_lieux_aleatoires(self, nb: int):
         self.liste_lieux = []
@@ -97,29 +116,6 @@ class Graph:
         best_idx = rem_list[np.argmin(distances)]
         return int(best_idx)
 
-    def plus_proche_voisin_adaptatif(self, index: int, remaining: set) -> int:
-        """
-        Version adaptative :
-        - Utilise la matrice OD si elle existe et est raisonnable en RAM.
-        - Utilise un calcul direct si nb_lieux > 10 000 pour éviter d'exploser la RAM.
-        """
-        best = None
-        best_dist = float("inf")
-
-        print(f"Points restants : {len(remaining)}")
-
-        li = self.liste_lieux[index]
-
-        for j in remaining:
-            lj = self.liste_lieux[j]
-            dx = li.x - lj.x
-            dy = li.y - lj.y
-            d = (dx*dx + dy*dy)**0.5
-            if d < best_dist:
-                best_dist = d
-                best = j
-
-        return best
 
     def calcul_distance_route(self, ordre: List[int]) -> float:
         """VERSION OPTIMISÉE avec numpy vectorisé."""
@@ -514,47 +510,50 @@ class Affichage:
 # =========================================
 
 if __name__ == '__main__':
-   
-    nb_lieux = 10000 # Augmente pour tester les performances
+    # ====== CONFIGURATION ======
+    csv_file = None # <-- mettre None pour générer des randoms
+    nb_lieux = 10000              # nombre de lieux si random
 
     # Création du graphe
-    g = Graph(nb_lieux=nb_lieux)
+    if csv_file is not None:
+        g = Graph(csv_file=csv_file)
+    else:
+        g = Graph(nb_lieux=nb_lieux)
 
     # ====== Phase 1 : Heuristique seule ======
-    if nb_lieux < 10000:
-        print("\n========== PHASE 1 : MÉTHODE HEURISTIQUE ==========")
-        t0 = time.time()
+    if g.nb_lieux <= 10000:
         methode_heuristique = "ppv"
-        route_heur = g.route_heuristique(methode_heuristique)
-        t1 = time.time()
-        dist_heur = route_heur.calcul_distance()
-        temps_heur = t1 - t0
-        print(f"Distance obtenue avec {methode_heuristique.upper()} : {dist_heur:.2f}")
-        print(f"Temps d'exécution ({methode_heuristique.upper()} seul) : {temps_heur:.3f} s")
     else:
-        print("\n========== PHASE 1 : MÉTHODE HEURISTIQUE ==========")
-        t0 = time.time()
         methode_heuristique = "ppv_adaptatif"
-        route_heur = g.route_heuristique(methode_heuristique)
-        t1 = time.time()
+
+    print(f"\n========== PHASE 1 : MÉTHODE HEURISTIQUE ({methode_heuristique.upper()}) ==========")
+    t0 = time.time()
+    route_heur = g.route_heuristique(methode_heuristique)
+    t1 = time.time()
+
+    # Choix de la distance selon la méthode
+    if methode_heuristique == "ppv_adaptatif":
         dist_heur = route_heur.distance_directe
-        temps_heur = t1 - t0
-        print(f"Distance obtenue avec {methode_heuristique.upper()} : {dist_heur:.2f}")
-        print(f"Temps d'exécution ({methode_heuristique.upper()} seul) : {temps_heur:.3f} s")
+    else:
+        dist_heur = route_heur.calcul_distance()
+
+    temps_heur = t1 - t0
+    print(f"Distance obtenue avec {methode_heuristique.upper()} : {dist_heur:.2f}")
+    print(f"Temps d'exécution ({methode_heuristique.upper()} seul) : {temps_heur:.3f} s")
 
     # ====== Phase 2 : ACO OPTIMISÉ avec heuristique ======
     print("\n========== PHASE 2 : ACO OPTIMISÉ (avec heuristique) ==========")
     t2 = time.time()
     aco = ACO_Optimized(
-        graph = g,
-        nb_fourmis = 200,
-        nb_iterations = 10000,
-        alpha = 1.0,
-        beta = 4.0,
-        rho = 0.3,
-        Q = 100.0,
-        route_initiale = route_heur,
-        temps_max = 180
+        graph=g,
+        nb_fourmis=200,
+        nb_iterations=10000,
+        alpha=1.0,
+        beta=4.0,
+        rho=0.3,
+        Q=100.0,
+        route_initiale=route_heur,
+        temps_max=10
     )
 
     meilleur_ordre, meilleure_distance = aco.optimiser(verbose=True)
@@ -563,7 +562,7 @@ if __name__ == '__main__':
     print(f"Distance finale avec ACO : {meilleure_distance:.2f}")
     print(f"Temps d'exécution (ACO + {methode_heuristique.upper()}) : {temps_aco:.3f} s")
 
-    # Comparaison
+    # ====== Comparaison ======
     improvement = (dist_heur - meilleure_distance) / dist_heur * 100
     print("\n========== COMPARAISON ==========")
     print(f"📏 Distance {methode_heuristique.upper()} : {dist_heur:.2f}")
@@ -578,7 +577,7 @@ if __name__ == '__main__':
     else:
         print(f"L'ACO a trouvé une solution moins bonne ({-improvement:.2f}% moins bonne)")
 
-    # Affichage avec Tkinter
+    # ====== Affichage ======
     route_aco = Route(g, meilleur_ordre)
     aff = Affichage(
         g,
