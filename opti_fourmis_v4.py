@@ -88,7 +88,6 @@ class Graph:
 
     def calcul_matrice_cout_od(self):
         """Calcule la matrice symétrique des distances euclidiennes entre tous les lieux (numpy optimisé)."""
-        print("entrée matrice optimisé")
         import time
         start_time = time.time()
 
@@ -109,7 +108,6 @@ class Graph:
 
         end_time = time.time()
         print(f"Temps calcul matrice optimisé : {end_time - start_time:.6f} s")
-        print("sortie matrice optimisé")
         return mat
     
     def plus_proche_voisin(self, index: int, remaining: Optional[set] = None) -> int:
@@ -118,9 +116,7 @@ class Graph:
         Si remaining est None, on considère tous les lieux sauf index.
         """
         if self.matrice_od is None:
-            self.calcul_matrice_cout_od()
-        
-        print(f"Points restants : {len(remaining)}")            
+            self.calcul_matrice_cout_od()        
 
         row = self.matrice_od[index]
 
@@ -181,7 +177,6 @@ class Graph:
             dists_voisins[idx,:len(final_indices[mask])] = final_dists[mask]
 
         self.matrice_voisins = (indices_voisins, dists_voisins)
-        print("Matrice sparse avec grille calculée.")
         return self.matrice_voisins
 
 
@@ -275,7 +270,7 @@ class Graph:
             return route_init
 
         elif methode == "aco":
-            aco = ACO_Optimized(graph=self)  # Utilise la version optimisée
+            aco = TSP_ACO(graph=self)  # Utilise la version optimisée
             meilleur_ordre, _ = aco.optimiser(verbose=False)
             return Route(self, meilleur_ordre)
 
@@ -287,7 +282,7 @@ class Graph:
 # CLASSE ACO OPTIMISÉE
 # =========================================
 
-class ACO_Optimized:
+class TSP_ACO:
     """
     Ant Colony Optimization OPTIMISÉ pour le problème du voyageur de commerce.
     Combinaison des deux versions : vectorisation numpy, callback, gestion temps max.
@@ -394,7 +389,7 @@ class ACO_Optimized:
             # Vérification du temps max avant l'itération
             if self.temps_max is not None and time.time() - start_time >= self.temps_max:
                 if verbose:
-                    print(f"\n⏹️ Temps max dépassé ({self.temps_max}s). Retour du meilleur résultat.")
+                    print(f"\nTemps max dépassé ({self.temps_max}s). Retour du meilleur résultat.")
                 return self.meilleure_route, self.meilleure_distance
 
             tours = []
@@ -402,7 +397,7 @@ class ACO_Optimized:
                 # Vérification du temps max au milieu d'une iteration
                 if self.temps_max is not None and time.time() - start_time >= self.temps_max:
                     if verbose:
-                        print(f"\n⏹️ Temps max dépassé pendant la construction. Retour du meilleur résultat.")
+                        print(f"\nTemps max dépassé pendant la construction. Retour du meilleur résultat.")
                     return self.meilleure_route, self.meilleure_distance
 
                 ordre = self._construire_solution()
@@ -419,7 +414,7 @@ class ACO_Optimized:
 
             # Callback pour affichage live
             if callback is not None and self.meilleure_route is not None:
-                callback=lambda r, p=None: aff.update_affichage(r, p)
+                callback(self.meilleure_route, self.pheromones)
 
 
             if verbose:
@@ -465,7 +460,6 @@ class Route:
         while improved:
             passe += 1
             improved = False
-            print(f"=== Passe {passe} ===")
             for i in range(1, len(best_ordre) - 2):
                 for j in range(i + 1, len(best_ordre) - 1):
                     if j - i == 1:
@@ -481,9 +475,6 @@ class Route:
                     new_route = Route(self.graph, new_ordre)
                     new_distance = new_route.calcul_distance()
 
-                    # Affichage statique des indices
-                    print(f"i = {i}, j = {j}", end="\r", flush=True)
-
                     if new_distance < best_distance:
                         best_ordre = new_ordre
                         best_distance = new_distance
@@ -495,7 +486,6 @@ class Route:
                             callback(best_ordre, best_distance)
 
             self.ordre = best_ordre.copy()
-            print(f"Fin de passe {passe}, distance actuelle : {best_distance:.2f}\n")
 
         return best_ordre, best_distance
 
@@ -551,17 +541,10 @@ class Affichage(tk.Tk):
         self.bind('<Escape>', lambda e: self.destroy())
         self.bind('f', self.toggle_pheromones)
 
-        # Nouveau flag pour limiter l'affichage
-        self.simple_affichage = self.graph.nb_lieux > 200
-
     # ------------------------------
     # AFFICHAGE DES LIEUX ET ROUTE
     # ------------------------------
     def afficher_lieux(self, route):
-        if self.simple_affichage:
-            # On ne dessine pas les ronds ni les textes
-            return
-
         self.canvas.delete("lieux")
         self.canvas.delete("ordres")
         for ordre_idx, lieu_idx in enumerate(route.ordre[:-1]):
@@ -578,9 +561,7 @@ class Affichage(tk.Tk):
         for i in range(len(route.ordre)-1):
             a = self.graph.liste_lieux[route.ordre[i]]
             b = self.graph.liste_lieux[route.ordre[i+1]]
-            # Si simple affichage, on peut changer couleur/épaisseur pour mieux voir
-            width = 2 if not self.simple_affichage else 1
-            self.canvas.create_line(a.x, a.y, b.x, b.y, fill='blue', dash=(6,6), width=width, tags="route")
+            self.canvas.create_line(a.x, a.y, b.x, b.y, fill='blue', dash=(6,6), width=2, tags="route")
 
     def afficher_pheromones_graph(self, pheromones):
         """Affiche les phéromones sur le canvas."""
@@ -638,7 +619,7 @@ if __name__ == '__main__':
     #   CONFIGURATION
     # ===============================
     csv_file = None  # <-- mettre None pour générer des randoms
-    nb_lieux = 50   # utilisé uniquement si csv_file=None
+    nb_lieux = 100   # utilisé uniquement si csv_file=None
     tps_max = 40
 
     # Création du graphe
@@ -693,7 +674,7 @@ if __name__ == '__main__':
         # ACO Optimisé
         print("\n========== PHASE 2 : ACO OPTIMISÉ ==========")
         t2 = time.time()
-        aco = ACO_Optimized(
+        aco = TSP_ACO(
             graph=g,
             nb_fourmis=200,
             nb_iterations=10000,
