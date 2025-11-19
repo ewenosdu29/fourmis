@@ -2,39 +2,31 @@ import csv
 import random
 import time
 from math import sqrt
-from typing import List, Optional, Tuple, Set
-
 import numpy as np
 import tkinter as tk
-from tkinter import scrolledtext
+from concurrent.futures import ThreadPoolExecutor
+import threading
 
-# ============================================================================
-# CONSTANTES
-# ============================================================================
 
+# Constantes
+TPS_MAX = 10
+CSV_FILE = "graph_5.csv"
 LARGEUR = 800
 HAUTEUR = 600
-NB_LIEUX = 10000
+NB_LIEUX = 1000
 RAYON_LIEU = 8
-N_BEST = 5  # par défaut pour l'affichage des N meilleures routes
+SEUIL_BIG_DATA = 10000
 
 
-# ============================================================================
-# CLASSE LIEU
-# ============================================================================
+from math import sqrt
 
 class Lieu:
-    """Représentation d'un lieu (x,y) avec un nom.
-    Fournit une méthode distance_to pour la distance euclidienne.
-    """
-
-    def __init__(self, x: float, y: float, name: Optional[str] = None):
+    def __init__(self, x, y, name=None):
         self.x = float(x)
         self.y = float(y)
         self.name = str(name) if name is not None else ""
 
-    def distance_to(self, other: "Lieu") -> float:
-        """Calcule la distance euclidienne vers un autre lieu."""
+    def distance(self, other):
         dx = self.x - other.x
         dy = self.y - other.y
         return sqrt(dx * dx + dy * dy)
@@ -43,623 +35,587 @@ class Lieu:
         return f"Lieu(name={self.name!r}, x={self.x:.2f}, y={self.y:.2f})"
 
 
-# ============================================================================
-# CLASSE GRAPH (OPTIMISÉE)
-# ============================================================================
-
 class Graph:
-    """Graphe de lieux IMMUTABLE et OPTIMISÉ.
-    
-    Une fois créé, le graphe ne change plus (liste_lieux fixe).
-    La matrice de distances est calculée AUTOMATIQUEMENT à la création.
-    
-    Attributs principaux :
-      - liste_lieux : List[Lieu] - TOUS les lieux (fixe, immuable)
-      - matrice_od : numpy.ndarray (n x n) - distances pré-calculées
-      - nb_lieux : int - nombre de lieux
-    
-    OPTIMISATIONS :
-      - Matrice calculée 1 fois automatiquement (pas de vérification répétée)
-      - Méthode plus_proche_voisin_rapide() pour itération sur set O(k)
-      - Graph réutilisable à l'infini (pas de modification interne)
-    """
-
-    def __init__(self, nb_lieux: int = NB_LIEUX, largeur: int = LARGEUR, hauteur: int = HAUTEUR):
-        """
-        Initialise un graphe avec génération aléatoire de lieux.
-        
-        Args:
-            nb_lieux: Nombre de lieux à générer
-            largeur: Largeur de l'espace (en pixels)
-            hauteur: Hauteur de l'espace (en pixels)
-        
-        Note: La matrice de distances est calculée AUTOMATIQUEMENT.
-        """
+    def __init__(self, nb_lieux=NB_LIEUX, largeur=LARGEUR, hauteur=HAUTEUR, csv_file=None):
         self.largeur = largeur
         self.hauteur = hauteur
         self.nb_lieux = int(nb_lieux)
-        
-        # Liste unique et fixe de TOUS les lieux
-        self.liste_lieux: List[Lieu] = []
-        
-        # Matrice des distances (sera calculée automatiquement)
-        self.matrice_od: Optional[np.ndarray] = None
-        
-        # Génération aléatoire des lieux
-        self.generer_lieux_aleatoires(self.nb_lieux)
-
-
-    def generer_lieux_aleatoires(self, nb: int):
-        """
-        Génère nb lieux avec coordonnées aléatoires.
-        Marge de 20px pour éviter que les lieux touchent les bords.
-        
-        Args:
-            nb: Nombre de lieux à générer
-        """
         self.liste_lieux = []
-        margin = 20
-        
+        self.matrice_od = None
+        self.coords_np = None
+        self.is_sparse = False
+        self.k_voisins = 100
+
+        if csv_file is not None:
+            print(f"Chargement des lieux depuis : {csv_file}")
+            self.charger_graph(csv_file)
+        else:
+            print(f"Génération de {nb_lieux} lieux aléatoires")
+            self.generer_lieux_aleatoires(self.nb_lieux)
+
+    def charger_graph(self, chemin_fichier):
+        self.liste_lieux = []
+        try:
+            with open(chemin_fichier, newline='', encoding='utf-8') as csvfile:
+                reader = csv.DictReader(csvfile)
+                reader.fieldnames = [name.strip() for name in reader.fieldnames]
+                for i, row in enumerate(reader):
+                    x = float(row.get('x', row.get('lon', 0)))
+                    y = float(row.get('y', row.get('lat', 0)))
+                    name = row.get('nom', row.get('name', str(i)))
+                    self.liste_lieux.append(Lieu(x, y, name=name))
+            self.nb_lieux = len(self.liste_lieux)
+        except FileNotFoundError:
+            self.generer_lieux_aleatoires(NB_LIEUX)
+
+    def generer_lieux_aleatoires(self, nb):
+        self.liste_lieux = []
+        coords = np.random.uniform(0, [self.largeur, self.hauteur], size=(nb, 2))
         for i in range(nb):
-            # Coordonnées aléatoires avec marge
-            x = random.uniform(margin, self.largeur - margin)
-            y = random.uniform(margin, self.hauteur - margin)
-            self.liste_lieux.append(Lieu(x, y, name=str(i)))
-        
+            self.liste_lieux.append(Lieu(coords[i][0], coords[i][1], name=str(i)))
         self.nb_lieux = len(self.liste_lieux)
-        self.matrice_od = None
-
-
-    def charger_graph(self, filename: str):
-        """
-        Charge les lieux depuis un fichier CSV.
-        Format attendu : x,y[,name] (avec ou sans ligne d'en-tête)
-        
-        Args:
-            filename: Chemin vers le fichier CSV
-        
-        Note: La matrice de distances est recalculée AUTOMATIQUEMENT.
-        """
-        lieux = []
-        
-        # Lecture du fichier
-        with open(filename, newline="", encoding="utf-8") as csvfile:
-            reader = csv.reader(csvfile)
-            rows = [r for r in reader if r]
-
-        # Détection d'en-tête (première ligne pas convertible en float)
-        def is_float(s):
-            try:
-                float(s)
-                return True
-            except Exception:
-                return False
-
-        start = 0
-        if rows:
-            first = rows[0]
-            if not rows[0] or not is_float(first[0]):
-                start = 1  # Sauter la ligne d'en-tête
-
-        # Lecture des lieux
-        for r in rows[start:]:
-            if len(r) >= 2:
-                x = float(r[0])
-                y = float(r[1])
-                name = r[2] if len(r) >= 3 else None
-                lieux.append(Lieu(x, y, name))
-
-        if not lieux:
-            raise ValueError("Aucun lieu trouvé dans le fichier CSV")
-
-        # Mise à l'échelle si les coordonnées dépassent la zone
-        xs = [l.x for l in lieux]
-        ys = [l.y for l in lieux]
-        minx, maxx = min(xs), max(xs)
-        miny, maxy = min(ys), max(ys)
-
-        def rescale(val, mn, mx, out_min, out_max):
-            """Mise à l'échelle linéaire"""
-            if mx == mn:
-                return (out_min + out_max) / 2
-            return out_min + (val - mn) * (out_max - out_min) / (mx - mn)
-
-        margin = 20
-        scaled = []
-        for l in lieux:
-            sx = rescale(l.x, minx, maxx, margin, self.largeur - margin)
-            sy = rescale(l.y, miny, maxy, margin, self.hauteur - margin)
-            scaled.append(Lieu(sx, sy, l.name))
-
-        self.liste_lieux = scaled
-        self.nb_lieux = len(self.liste_lieux)
-        self.matrice_od = None
-    
 
     def calcul_matrice_cout_od(self):
-        """Calcule la matrice symétrique des distances euclidiennes entre tous les lieux (numpy optimisé)."""
-        print("entrée matrice optimisé")
-        import time
-        start_time = time.time()
+        n = self.nb_lieux
+        self.coords_np = np.array([[l.x, l.y] for l in self.liste_lieux], dtype=np.float32)
+
+        if n <= SEUIL_BIG_DATA:
+            print("Calcul Matrice Complète...")
+            diff = self.coords_np[:, np.newaxis, :] - self.coords_np[np.newaxis, :, :]
+            self.matrice_od = np.sqrt(np.sum(diff**2, axis=-1))
+            self.is_sparse = False
+        else:
+            print(f"Mode BIG DATA ({n} lieux). Indexation Spatiale...")
+            self.is_sparse = True
+            self.matrice_od = self._calculer_voisins_grille(self.coords_np, n)
+
+    def _calculer_voisins_grille(self, coords, n):
+        t0 = time.time()
+        grid_size = 50 
+        grid = {}
+        
+        ix = (coords[:, 0] // grid_size).astype(int)
+        iy = (coords[:, 1] // grid_size).astype(int)
+        for i in range(n):
+            k = (ix[i], iy[i])
+            if k not in grid: grid[k] = []
+            grid[k].append(i)
+            
+        indices_voisins = np.zeros((n, self.k_voisins), dtype=int)
+        
+        def process_chunk(start, end):
+            offsets = [(-1,-1), (-1,0), (-1,1), (0,-1), (0,0), (0,1), (1,-1), (1,0), (1,1)]
+            for i in range(start, end):
+                k_curr = (ix[i], iy[i])
+                cands = []
+                for dx, dy in offsets:
+                    nk = (k_curr[0]+dx, k_curr[1]+dy)
+                    if nk in grid: cands.extend(grid[nk])
+                
+                cands_idx = np.array(cands, dtype=int)
+                if len(cands_idx) <= self.k_voisins:
+                    cands_idx = np.random.randint(0, n, self.k_voisins+1)
+                
+                pts_c = coords[cands_idx]
+                pt_i = coords[i]
+                d = np.sqrt(np.sum((pts_c - pt_i)**2, axis=1))
+                
+                k_take = min(len(d)-1, self.k_voisins + 1)
+                part_idx = np.argpartition(d, k_take)[:k_take+1]
+                sorted_idx = part_idx[np.argsort(d[part_idx])]
+                
+                raw_idx = cands_idx[sorted_idx]
+                final = raw_idx[raw_idx != i][:self.k_voisins]
+                indices_voisins[i, :len(final)] = final
+
+        n_cpu = max(1, 7)
+        chunk = n // n_cpu
+        with ThreadPoolExecutor(max_workers=n_cpu) as exe:
+            for i in range(n_cpu):
+                s = i * chunk
+                e = n if i == n_cpu - 1 else (i+1) * chunk
+                exe.submit(process_chunk, s, e)
+                
+        print(f"Indexation terminée ({time.time()-t0:.2f}s)")
+        return (indices_voisins, None)
+
+    def plus_proche_voisin(self, index, remaining=None):
+        if self.matrice_od is None: self.calcul_matrice_cout_od()
+        
+        if self.is_sparse:
+            voisins_possibles, _ = self.matrice_od
+            candidats = voisins_possibles[index]
+            for c in candidats:
+                if c in remaining: return int(c)
+            return next(iter(remaining))
+        else:
+            row = self.matrice_od[index]
+            rem_list = np.array(list(remaining))
+            dists = row[rem_list]
+            return int(rem_list[np.argmin(dists)])
+
+    def calcul_distance_route(self, ordre):
+        if not ordre: return 0.0
+        if self.coords_np is None: self.calcul_matrice_cout_od()
+        
+        o = np.array(ordre)
+        pts_a = self.coords_np[o[:-1]]
+        pts_b = self.coords_np[o[1:]]
+        return float(np.sum(np.sqrt(np.sum((pts_a - pts_b)**2, axis=1))))
+
+    def route_heuristique(self, methode=None):
+        print(f"\nMéthode utilisée : {methode.upper()} (nb_lieux = {self.nb_lieux})")
 
         n = self.nb_lieux
-        coords = np.array([[l.x, l.y] for l in self.liste_lieux], dtype=float)
-
-        # Matrice vide
-        mat = np.zeros((n, n), dtype=float)
-
-        # On calcule seulement la moitié supérieure
-        for i in range(n):
-            diff = coords[i+1:] - coords[i]      # vecteurs vers les points suivants
-            dists = np.sqrt(np.sum(diff**2, axis=1))
-            mat[i, i+1:] = dists
-            mat[i+1:, i] = dists                 # symétrie
-
-        self.matrice_od = mat
-
-        end_time = time.time()
-        print(f"Temps calcul matrice optimisé : {end_time - start_time:.6f} s")
-        print("sortie matrice optimisé")
-        return mat
-
-
-
-    def plus_proche_voisin(self, index: int, remaining: Optional[set] = None) -> int:
-        """Retourne l'indice du plus proche voisin du lieu `index` dans remaining.
-        Si remaining est None, on considère tous les lieux sauf index.
-        """
-        if self.matrice_od is None:
-            self.calcul_matrice_cout_od()
-
-        row = self.matrice_od[index]
-
-        # conversion en array numpy pour vectorisation
-        rem_list = np.array(list(remaining))
-        distances = row[rem_list]
-        best_idx = rem_list[np.argmin(distances)]
-        return int(best_idx)
-    
-
-    def plus_proche_voisin_inf_100(self, index: int, remaining: Optional[set] = None) -> int:
-        """Retourne l'indice du plus proche voisin du lieu `index` dans remaining.
-        Si remaining est None, on considère tous les lieux sauf index.
-        """
-        if self.matrice_od is None:
-            self.calcul_matrice_cout_od()
-        
-        row = self.matrice_od[index]
-
-        best_idx = -1
-        best_d = float('inf')
-        for j in remaining:
-            d = row[j]
-            if d < best_d:
-                best_d = d
-                best_idx = j
-
-        return best_idx
-
-
-    def calcul_distance_route(self, ordre: List[int]) -> float:
-        """
-        Calcule la distance totale d'une route (liste d'indices).
-        
-        Args:
-            ordre: Liste d'indices de lieux (ex: [0, 3, 5, 1, 2, 0])
-        
-        Returns:
-            float: Distance totale de la route
-        
-        ✅ OPTIMISATION : Pas de vérification de matrice_od
-        """
-        if not ordre:
-            return 0.0
-        
-        # ✅ PAS DE CHECK - la matrice est TOUJOURS calculée
-        dist = 0.0
-        for a, b in zip(ordre[:-1], ordre[1:]):
-            dist += self.matrice_od[a, b]
-        
-        return float(dist)
-    
-
-    def route_heuristique(self, methode: str = "ppv") -> "Route":
-        if self.matrice_od is None:
-            self.calcul_matrice_cout_od()
-
         if methode == "ppv":
-            n = self.nb_lieux
             remaining = set(range(1, n))
             ordre = [0]
             current = 0
-
             for _ in range(n - 1):
                 nxt = self.plus_proche_voisin(current, remaining)
                 ordre.append(nxt)
                 remaining.remove(nxt)
                 current = nxt
-
             ordre.append(0)
             return Route(self, ordre)
-        
-        elif methode == "ppv2":
-            n = self.nb_lieux
-            ordre = [0]
-            current = 0
-            remaining = set(range(1, n))
-
-            for _ in range(n - 1):
-                nxt = self.plus_proche_voisin_inf_100(current, remaining)
-                ordre.append(nxt)
-                remaining.remove(nxt)
-                current = nxt
-
-            ordre.append(0)
-            return Route(self, ordre)
-
-
-        elif methode == "2opt":
-            route_init = Route(self)
-            route_init.ameliorer_2opt()
-            return route_init
-
         else:
-            raise ValueError("Méthode inconnue. Utilisez 'ppv', 'ppv2' ou '2opt'.")
+            return self.route_heuristique("ppv") 
 
+
+class TSP_ACO:
+    def __init__(
+        self,
+        graph,
+        nb_fourmis=30,
+        nb_iterations=100,
+        alpha=1.0,
+        beta=2.0,
+        rho=0.5,
+        Q=100.0,
+        route_initiale=None,
+        temps_max=None
+    ):
+        self.graph = graph
+        self.nb_fourmis = nb_fourmis
+        self.nb_iterations = nb_iterations
+        self.alpha = alpha
+        self.beta = beta
+        self.rho = rho
+        self.Q = Q
+        self.temps_max = temps_max
+        self.n = self.graph.nb_lieux
+        self.pheromones = self._initialiser_pheromones(route_initiale)
+
+        with np.errstate(divide='ignore', invalid='ignore'):
+            self.heuristique = np.where(self.graph.matrice_od > 0, 1.0 / self.graph.matrice_od, 0)
+        np.fill_diagonal(self.heuristique, 0)
+
+        self.eta_beta = self.heuristique ** self.beta
+        self.tau_alpha = None
+        self._update_tau_alpha()
+
+        self.meilleure_route = None
+        self.meilleure_distance = float('inf')
+        self.historique_distances = []
+
+    def _initialiser_pheromones(self, route_initiale):
+        tau_0 = 0.1
+        pheromones = np.full((self.n, self.n), tau_0)
+        if route_initiale is not None:
+            distance_init = route_initiale.calcul_distance()
+            bonus = self.Q / distance_init
+            bonus_factor = self.n
+            for i in range(len(route_initiale.ordre) - 1):
+                a, b = route_initiale.ordre[i], route_initiale.ordre[i+1]
+                pheromones[a, b] += bonus * bonus_factor
+                pheromones[b, a] += bonus * bonus_factor
+        return pheromones
+
+    def _update_tau_alpha(self):
+        self.tau_alpha = self.pheromones ** self.alpha
+
+    def _construire_solution(self):
+        tour = [0]
+        visite = np.zeros(self.n, dtype=bool)
+        visite[0] = True
+        ville_actuelle = 0
+
+        for _ in range(self.n - 1):
+            prochaine = self._choisir_prochaine_ville_fast(ville_actuelle, visite)
+            tour.append(prochaine)
+            visite[prochaine] = True
+            ville_actuelle = prochaine
+
+        tour.append(0)
+        return tour
+
+    def _choisir_prochaine_ville_fast(self, ville_actuelle, visite):
+        mask = ~visite
+        if not np.any(mask):
+            return 0
+        probas = self.tau_alpha[ville_actuelle] * self.eta_beta[ville_actuelle] * mask
+        somme = probas.sum()
+        if somme == 0:
+            return np.random.choice(np.where(mask)[0])
+        return np.random.choice(self.n, p=probas/somme)
+
+    def _evaporation(self):
+        self.pheromones *= (1 - self.rho)
+        self._update_tau_alpha()
+
+    def _depot_pheromones(self, tours):
+        for ordre, distance in tours:
+            depot = self.Q / distance
+            aretes_i = np.array(ordre[:-1])
+            aretes_j = np.array(ordre[1:])
+            self.pheromones[aretes_i, aretes_j] += depot
+            self.pheromones[aretes_j, aretes_i] += depot
+        self._update_tau_alpha()
+
+    def optimiser(self, verbose=False, callback=None):
+        start_time = time.time()
+        for iteration in range(self.nb_iterations):
+            if self.temps_max is not None and time.time() - start_time >= self.temps_max:
+                if verbose: print(f"\nTemps max dépassé. Retour du meilleur résultat.")
+                return self.meilleure_route, self.meilleure_distance
+
+            tours = []
+            for _ in range(self.nb_fourmis):
+                if self.temps_max is not None and time.time() - start_time >= self.temps_max:
+                    if verbose: print(f"\nTemps max dépassé pendant la construction.")
+                    return self.meilleure_route, self.meilleure_distance
+
+                ordre = self._construire_solution()
+                distance = self.graph.calcul_distance_route(ordre)
+                tours.append((ordre, distance))
+                if distance < self.meilleure_distance:
+                    self.meilleure_distance = distance
+                    self.meilleure_route = ordre.copy()
+
+            self._evaporation()
+            self._depot_pheromones(tours)
+            self.historique_distances.append(self.meilleure_distance)
+
+            iteration_str = f"Itération {iteration + 1}/{self.nb_iterations}"
+
+            if callback is not None and self.meilleure_route is not None:
+                callback(self.meilleure_route, self.pheromones, iteration_str)
+
+            if verbose:
+                print(f"Itération {iteration+1}/{self.nb_iterations} - Meilleure distance : {self.meilleure_distance:.2f}")
+
+        return self.meilleure_route, self.meilleure_distance
 
 
 class Route:
-    """Représente une route (ordre de visites).
-    
-    Par contrainte TSP, doit commencer et finir par le lieu 0.
-    
-    Attributs :
-      - ordre : List[int] (ex: [0, 3, 8, 1, ..., 0])
-      - graph : Graph (référence au graphe)
-    """
-
-    def __init__(self, graph: Graph, ordre: Optional[List[int]] = None):
-        """
-        Initialise une route.
-        
-        Args:
-            graph: Le graphe de référence
-            ordre: Liste d'indices de lieux (None = génération aléatoire)
-        
-        Note: Si ordre ne commence/finit pas par 0, ils sont ajoutés automatiquement.
-        """
+    def __init__(self, graph, ordre=None):
         self.graph = graph
-        
         if ordre is None:
-            # Génère une permutation aléatoire avec 0 au début et à la fin
             perm = list(range(1, graph.nb_lieux))
             random.shuffle(perm)
-            self.ordre = [0] + perm + [0]
+            ordre_gen = [0] + perm + [0]
+            self.ordre = ordre_gen
         else:
-            # Normalise pour s'assurer que commence et finit par 0
-            if ordre[0] != 0:
-                ordre = [0] + ordre
-            if ordre[-1] != 0:
-                ordre = ordre + [0]
+            if ordre[0] != 0: ordre = [0] + ordre
+            if ordre[-1] != 0: ordre = ordre + [0]
             self.ordre = ordre
+        
+        self.distance = self.calcul_distance()
 
-    def calcul_distance(self) -> float:
-        """Calcule la distance totale de cette route."""
+    def calcul_distance(self):
         return self.graph.calcul_distance_route(self.ordre)
-    
-    def ameliorer_2opt(self):
-        """Améliore la route actuelle par l’algorithme 2-opt optimisé (delta distance)."""
+
+    def ameliorer_2opt(self, callback=None, temps_max=None):
+        start_time = time.time()
+
         improved = True
-        best_distance = self.calcul_distance()
+        best_distance = self.distance
         best_ordre = self.ordre.copy()
-        n = len(best_ordre)
+        # Initialisation du compteur de passes 2-OPT (une passe correspond à une itération complète sur toutes les paires)
+        passe_2opt = 0
 
         while improved:
+            passe_2opt += 1
             improved = False
-            for i in range(1, n - 2):
-                for j in range(i + 1, n - 1):
-                    if j - i == 1:
-                        continue  # éviter les inversions inutiles
+            for i in range(1, len(best_ordre) - 2):
+                for j in range(i + 1, len(best_ordre) - 1):
+                    if j - i == 1: continue
 
-                    a, b = best_ordre[i - 1], best_ordre[i]
-                    c, d = best_ordre[j - 1], best_ordre[j]
+                    if temps_max is not None and (time.time() - start_time) > temps_max:
+                        print(f"\nTemps max {temps_max}s atteint, arrêt prématuré")
+                        self.ordre = best_ordre.copy()
+                        self.distance = best_distance
+                        return best_ordre, best_distance
 
-                    # calcul du delta de distance
-                    delta = (
-                        self.graph.matrice_od[a, c] +
-                        self.graph.matrice_od[b, d] -
-                        self.graph.matrice_od[a, b] -
-                        self.graph.matrice_od[c, d]
-                    )
+                    new_ordre = best_ordre[:i] + best_ordre[i:j][::-1] + best_ordre[j:]
+                    new_route = Route(self.graph, new_ordre)
+                    new_distance = new_route.distance
 
-                    if delta < -1e-12:  # tolérance flottant
-                        # inversion in-place du segment i:j
-                        best_ordre[i:j] = best_ordre[i:j][::-1]
-                        best_distance += delta
+                    if new_distance < best_distance:
+                        best_ordre = new_ordre
+                        best_distance = new_distance
                         improved = True
+                        print(f"  -> Amélioration trouvée : {best_distance:.2f}")
+
+                        if callback is not None:
+                            callback(best_ordre, best_distance, passe_2opt)
 
             self.ordre = best_ordre.copy()
+            self.distance = best_distance
 
+        # Retourne le résultat final après convergence
         return best_ordre, best_distance
-    
-    def is_valid(self) -> bool:
-        return len(self.ordre) >= 2 and self.ordre[0] == 0 and self.ordre[-1] == 0 and len(set(self.ordre[1:-1])) == (len(self.ordre) - 2)
 
     def __repr__(self):
         return f"Route(dist={self.calcul_distance():.2f}, ordre={self.ordre})"
-
-
-# ============================================================================
-# CLASSE AFFICHAGE
-# ============================================================================
-
-class Affichage:
-    """Affichage Tkinter du graphe et des routes.
     
-    Fonctionnalités :
-    - Affiche les lieux (cercles numérotés)
-    - Affiche la meilleure route (ligne bleue pointillée)
-    - Affiche N meilleures routes en gris clair (touche 'p')
-    - Affiche la matrice des coûts (touche 'm')
-    - Zone de texte pour informations et statistiques
-    
-    Touches :
-    - ESC : quitter
-    - 'p' : afficher/masquer N meilleures routes
-    - 'm' : afficher/masquer matrice des coûts
-    """
+    @classmethod
+    def from_sparse_grille(cls, graph):
+        remaining = set(range(1, graph.nb_lieux))
+        ordre = [0]
+        current = 0
 
-    def __init__(self, graph: Graph, routes_population: Optional[List[Route]] = None, 
-                 group_name: str = "Groupe TSP"):
-        """
-        Initialise l'affichage.
-        
-        Args:
-            graph: Le graphe à afficher
-            routes_population: Liste de routes (pour affichage des N meilleures)
-            group_name: Nom du groupe (affiché dans le titre)
-        """
+        while remaining:
+            nxt = graph.plus_proche_voisin(current, remaining) 
+            ordre.append(nxt)
+            remaining.remove(nxt)
+            current = nxt
+
+        ordre.append(0)
+        return cls(graph, ordre)
+
+
+class Affichage(tk.Tk):
+    def __init__(self, graph):
+        super().__init__()
         self.graph = graph
-        self.routes_population = routes_population or []
-        self.best_route: Optional[Route] = None
+        self.title("JC.Ilan C.Paul H.Ewen T.Lucas        Groupe 5")
         
-        # Trouver la meilleure route de la population
-        if self.routes_population:
-            self.best_route = min(self.routes_population, key=lambda r: r.calcul_distance())
-        
-        # Options d'affichage
-        self.show_population = False
-        self.show_matrix = False
-        self.N_best = N_BEST
-        self.methode = methode  # <-- ajout du paramètre méthode
-
-        # ===== Configuration Tkinter =====
-        self.root = tk.Tk()
-        self.root.title(f"TSP - {group_name}")
-        
-        # Canvas pour le dessin
-        self.canvas = tk.Canvas(
-            self.root, 
-            width=self.graph.largeur, 
-            height=self.graph.hauteur, 
-            bg="white"
-        )
+        self.canvas = tk.Canvas(self, width=LARGEUR, height=HAUTEUR, bg='white')
         self.canvas.pack()
-
-        # Zone de texte scrollable
-        self.text = scrolledtext.ScrolledText(self.root, height=8)
-        self.text.pack(fill=tk.BOTH, expand=False)
-
-        # Raccourcis clavier
-        self.root.bind('<Escape>', lambda e: self.root.quit())
-        self.root.bind('p', lambda e: self.toggle_population())
-        self.root.bind('m', lambda e: self.toggle_matrix())
-
-        # Dessin initial
-        self._draw_all()
-
-    def _coord_canvas(self, lieu: Lieu) -> Tuple[float, float]:
-        """Retourne les coordonnées canvas d'un lieu."""
-        return lieu.x, lieu.y
-
-    def _draw_lieux(self):
-        """Dessine tous les lieux du graphe (cercles numérotés)."""
-        self.canvas.delete('lieu')
         
-        for idx, lieu in enumerate(self.graph.liste_lieux):
-            x, y = self._coord_canvas(lieu)
-            x0, y0 = x - RAYON_LIEU, y - RAYON_LIEU
-            x1, y1 = x + RAYON_LIEU, y + RAYON_LIEU
-            
-            # Cercle
-            self.canvas.create_oval(
-                x0, y0, x1, y1, 
-                fill='white', 
-                outline='black', 
-                tags='lieu'
-            )
-            
-            # Numéro
-            self.canvas.create_text(
-                x, y, 
-                text=str(idx), 
-                tags='lieu'
-            )
+        self.text_zone = tk.Text(self, height=7, width=80, bg='lightgray', fg='black')
+        self.text_zone.pack(fill='x')
 
-    def _draw_route(self, route: Route, color: str = 'blue', 
-                    dashed: bool = False, width: int = 2, tag: str = 'best'):
-        """
-        Dessine une route sur le canvas.
+        # Préparation zone STATIQUE
+        self.text_zone.insert(tk.END, "Meilleur Score : N/A ")
+        self.text_zone.tag_add("static_score", "1.0", "1.end")
+        self.text_zone.tag_configure("static_score", font=('Helvetica', 10, 'bold'), background='lightblue')
+        self.text_zone.insert(tk.END, "\n")
         
-        Args:
-            route: La route à dessiner
-            color: Couleur de la ligne
-            dashed: True pour ligne pointillée
-            width: Épaisseur de la ligne
-            tag: Tag Tkinter pour identifier la route
-        """
-        if not route or not route.ordre:
-            return
+        self.log_start_index = "2.0" 
+
+        self.simple_affichage = self.graph.nb_lieux > 200
+        self.affiche_pheromones = False
+        self.pheromones = None
+        self.route = None
+
+        self.bind('<Escape>', lambda e: self.destroy())
+        self.bind('f', self.toggle_pheromones)
+
+    
+    def afficher_lieux(self, route):
+        if self.simple_affichage: return
         
-        # Construire la liste de coordonnées
-        coords = []
-        for idx in route.ordre:
-            lieu = self.graph.liste_lieux[idx]
-            coords.extend(self._coord_canvas(lieu))
+        self.canvas.delete("lieux", "ordres")
+        for ordre_idx, lieu_idx in enumerate(route.ordre[:-1]):
+            lieu = self.graph.liste_lieux[lieu_idx]
+            couleur = "red" if lieu_idx == 0 else "#D3D3D3"
+            self.canvas.create_oval(lieu.x-RAYON_LIEU, lieu.y-RAYON_LIEU, 
+                                    lieu.x+RAYON_LIEU, lieu.y+RAYON_LIEU,
+                                    fill=couleur, outline="black", tags="lieux")
+            self.canvas.create_text(lieu.x, lieu.y, text=str(lieu_idx), tags="lieux")
+            self.canvas.create_text(lieu.x, lieu.y-14, text=str(ordre_idx), fill="gray", tags="ordres")
+
+    def afficher_route(self, route):
+        self.canvas.delete("route")
+        for i in range(len(route.ordre)-1):
+            a = self.graph.liste_lieux[route.ordre[i]]
+            b = self.graph.liste_lieux[route.ordre[i+1]]
+            self.canvas.create_line(a.x, a.y, b.x, b.y, fill='blue', dash=(6,6), width=2, tags="route")
+
+    def afficher_pheromones_graph(self, pheromones):
+        self.canvas.delete("pheromones")
+        if not self.affiche_pheromones or pheromones is None: return
+        MAX_WIDTH = 8
+        SEUIL_RELATIF = 0.1
+        max_ph = np.max(pheromones) if np.max(pheromones) > 0 else 1
+        for i in range(self.graph.nb_lieux):
+            for j in range(i+1, self.graph.nb_lieux):
+                p = pheromones[i,j]
+                if p < SEUIL_RELATIF * max_ph: continue
+                a = self.graph.liste_lieux[i]
+                b = self.graph.liste_lieux[j]
+                width = max(1, (p / max_ph) * MAX_WIDTH)
+                self.canvas.create_line(a.x, a.y, b.x, b.y, fill="lightpink", width=width, tags="pheromones")
+
+    def update_affichage(self, route, pheromones=None):
+        self.route = route
+        self.pheromones = pheromones
+        self.canvas.delete("all")
+        self.afficher_lieux(route)
+        if pheromones is not None and self.affiche_pheromones:
+            self.afficher_pheromones_graph(pheromones)
+        self.afficher_route(route)
+        self.update_idletasks()
+        self.update()
+
+    def log(self, msg):
+        self.text_zone.insert(tk.END, msg + "\n")
+        self.text_zone.see(tk.END)
+
+    def update_best_score(self, distance, iteration_info=""):
+        new_text = f"Meilleur Score : {distance:.2f}    |    {iteration_info}"
+        self.text_zone.delete("1.0", "1.end - 1c")
+        self.text_zone.insert("1.0", new_text, "static_score")
+
+    def toggle_pheromones(self, e=None):
+        self.affiche_pheromones = not self.affiche_pheromones
+        if self.route is not None:
+            self.update_affichage(self.route, self.pheromones)
+
+
+def run_optimization(g, aff, route_heur, dist_heur, temps_heur, tps_max):
+    
+    global meilleure_distance, meilleur_ordre
+    meilleure_distance = float('inf')
+    meilleur_ordre = route_heur.ordre.copy()
+    pheromones_finales = None
+
+    n = g.nb_lieux
+    t2 = time.time()
+    
+    # PHASE 2 : ACO (N < SEUIL_BIG_DATA)
+    if n < SEUIL_BIG_DATA:
+        print("\n========== PHASE 2 : ACO ==========")
+        aff.after(0, aff.log, "Démarrage ACO...")
         
-        # Style de ligne
-        dash = (4, 6) if dashed else None
-        
-        # Supprimer ancienne route avec ce tag
-        self.canvas.delete(tag)
-        
-        # Dessiner la ligne
-        self.canvas.create_line(
-            *coords, 
-            fill=color, 
-            width=width, 
-            dash=dash, 
-            tags=tag
+        def aco_callback(route_ordre, pheromones, iteration_info):
+            r = Route(g, route_ordre)
+            aff.after(0, aff.update_affichage, r, pheromones)
+            aff.after(0, aff.update_best_score, r.distance, iteration_info)
+
+        aco = TSP_ACO(
+            graph=g,
+            nb_fourmis=100,
+            nb_iterations=10000,
+            alpha=1.0, beta=4.0, rho=0.3, Q=100.0,
+            route_initiale=route_heur,
+            temps_max=tps_max
         )
+        meilleur_ordre, meilleure_distance = aco.optimiser(
+            callback=aco_callback
+        )
+        route_finale = Route(g, meilleur_ordre)
         
-        # Afficher l'ordre de visite au-dessus de chaque lieu
-        for order_idx, node in enumerate(route.ordre[:-1]):
-            x, y = self._coord_canvas(self.graph.liste_lieux[node])
-            self.canvas.create_text(
-                x, y - 12, 
-                text=str(order_idx), 
-                font=("Arial", 8), 
-                tags=tag
-            )
+        pheromones_finales = aco.pheromones
 
-    def _draw_population(self):
-        """Dessine les N meilleures routes de la population en gris clair."""
-        self.canvas.delete('population')
-        
-        if not self.routes_population:
-            return
-        
-        # Trier par distance
-        sorted_routes = sorted(self.routes_population, key=lambda r: r.calcul_distance())
-        
-        # Dessiner les N meilleures
-        for r in sorted_routes[:self.N_best]:
-            self._draw_route(r, color='lightgray', dashed=False, width=1, tag='population')
+    # PHASE 2 : 2-OPT CLASSIQUE (N = SEUIL_BIG_DATA)
+    elif n == SEUIL_BIG_DATA:
+        print("\n========== PHASE 2 : 2-OPT CLASSIQUE ==========")
+        aff.after(0, aff.log, "Démarrage 2-OPT Classique...")
 
-    def _draw_cost_matrix_in_text(self):
-        """Affiche la matrice des coûts dans la zone de texte."""
-        self.text.delete('1.0', tk.END)
-        
-        if not self.show_matrix:
-            return
-        
-        mat = self.graph.matrice_od
-        n = self.graph.nb_lieux
-        
-        self.text.insert(tk.END, "Matrice des coûts (distances euclidiennes)\n")
-        self.text.insert(tk.END, "="*70 + "\n")
-        
-        # Formatage simple de la matrice
-        for i in range(n):
-            row = ' '.join(f"{mat[i,j]:6.1f}" for j in range(n))
-            self.text.insert(tk.END, row + "\n")
+        # Le callback reçoit (ordre, distance, passe_2opt)
+        def callback_2opt(route_ordre, distance, passe_2opt):
+            r = Route(g, route_ordre)
+            aff.after(0, aff.update_affichage, r)
+            iteration_info = f"Passe 2-OPT: {passe_2opt}"
+            aff.after(0, aff.update_best_score, distance, iteration_info) 
 
-    def _draw_all(self):
-        """Redessine tout l'affichage."""
-        self.canvas.delete('all')
-        
-        # Dessiner dans l'ordre : population, lieux, meilleure route
-        self._draw_lieux()
-        
-        if self.show_population:
-            self._draw_population()
-        
-        if self.best_route:
-            # Ligne bleue pointillée pour la meilleure route
-            self._draw_route(
-                self.best_route, 
-                color='blue', 
-                dashed=True, 
-                width=2, 
-                tag='best_route'
-            )
-        
-        self._draw_cost_matrix_in_text()
-        self._log_status()
+        meilleur_ordre, meilleure_distance = route_heur.ameliorer_2opt(
+            temps_max=tps_max,
+            # Le callback doit être mis à jour pour accepter le 3ème argument
+            callback=lambda r_ordre, dist, passe: callback_2opt(r_ordre, dist, passe)
+        )
+        route_finale = Route(g, meilleur_ordre)
+        pheromones_finales = None
 
-    def _log_status(self):
-        """Affiche les informations dans la zone de texte."""
-        self.text.insert(tk.END, f"\nHeure: {time.strftime('%H:%M:%S')} - Lieux: {self.graph.nb_lieux}\n")
-        
-        if self.best_route:
-            self.text.insert(tk.END, f"Meilleure distance: {self.best_route.calcul_distance():.2f}\n")
-        
-        if self.show_population and self.routes_population:
-            bests = sorted(self.routes_population, key=lambda r: r.calcul_distance())[:self.N_best]
-            self.text.insert(tk.END, f"\n{self.N_best} meilleures routes:\n")
-            for i, r in enumerate(bests):
-                self.text.insert(tk.END, f"  {i+1}. dist={r.calcul_distance():.2f}\n")
-        
-        self.text.see(tk.END)
+    # PHASE 2 : 2-OPT BIG DATA (N > SEUIL_BIG_DATA)
+    else:
+        print("\n========== PHASE 2 : 2-OPT BIG DATA ==========")
+        aff.after(0, aff.log, "Démarrage 2-OPT Big Data...")
 
-    def toggle_population(self):
-        """Bascule l'affichage des N meilleures routes."""
-        self.show_population = not self.show_population
-        self._draw_all()
+        # Le callback reçoit (ordre, distance, passe_2opt)
+        def callback_2opt(route_ordre, distance, passe_2opt):
+            r = Route(g, route_ordre)
+            aff.after(0, aff.update_affichage, r)
+            iteration_info = f"Passe 2-OPT: {passe_2opt}"
+            aff.after(0, aff.update_best_score, distance, iteration_info)
 
-    def toggle_matrix(self):
-        """Bascule l'affichage de la matrice des coûts."""
-        self.show_matrix = not self.show_matrix
-        self._draw_all()
+        meilleur_ordre, meilleure_distance = route_heur.ameliorer_2opt(
+            temps_max=tps_max,
+            callback=lambda r_ordre, dist, passe: callback_2opt(r_ordre, dist, passe)
+        )
+        route_finale = Route(g, meilleur_ordre)
+        pheromones_finales = None
 
-    def mainloop(self):
-        """Lance la boucle principale Tkinter."""
-        self.root.mainloop()
+    t3 = time.time()
+    temps_opt = t3 - t2
 
+    # AFFICHAGE FINAL
+    improvement = (dist_heur - meilleure_distance) / dist_heur * 100
+    print("\n========== COMPARAISON ==========")
+    
+    def afficher_final_secure(ph_final):
+        aff.pheromones = ph_final
+        aff.update_affichage(route_finale, pheromones=ph_final)
+        aff.log(f"--- RÉSULTAT FINAL ---")
+        aff.log(f"Distance finale : {meilleure_distance:.2f}  ({improvement:.2f}% d'amélioration)")
+        aff.log(f"Temps heuristique : {temps_heur:.2f}s")
+        aff.log(f"Temps total : {temps_heur + temps_opt:.2f}s")
+        aff.update_best_score(meilleure_distance, "Terminé")
 
-# ============================================================================
-# TESTS ET EXEMPLE
-# ============================================================================
+    aff.after(2000, afficher_final_secure, pheromones_finales)
+
 
 if __name__ == '__main__':
-    import time
+    # Configuration initiale
+    csv_file = CSV_FILE
+    nb_lieux = 10
+    tps_max = TPS_MAX
 
-    # === Optionnel : affichage graphique de la meilleure méthode ===
-    g = Graph(nb_lieux=NB_LIEUX)
-    g.calcul_matrice_cout_od()
+    g = Graph(csv_file=csv_file, nb_lieux=nb_lieux)
+    g.calcul_matrice_cout_od() 
 
-    if NB_LIEUX <= 100:
-        # On commence par PPV puis on améliore avec 2OPT
-        print("\nMéthode utilisée : PPV + 2OPT")
-
-        # Chronométrage PPV + 2OPT
-        start_2opt = time.time()
-        route_initiale = g.route_heuristique("ppv2")
-        route_initiale.ameliorer_2opt()
-        end_2opt = time.time()
-        print(f"Temps d'exécution : {end_2opt - start_2opt:.6f} secondes")
-
-        route_finale = route_initiale
-        methode_affichee = "ppv+2opt"
-
+    n = g.nb_lieux
+    t0 = time.time()
+    
+    # PHASE 1 : Heuristique PPV
+    if n <= SEUIL_BIG_DATA:
+        methode_heuristique = "ppv"
+        route_heur = g.route_heuristique("ppv")
     else:
-        # Pour les grands graphes, on fait juste PPV
-        print("\nMéthode utilisée : PPV")
-        start_2opt = time.time()
-        route_finale = g.route_heuristique("ppv")
-        end_2opt = time.time()
-        print(f"Temps d'exécution : {end_2opt - start_2opt:.6f} secondes")
+        methode_heuristique = "ppv_sparse_grille"
+        
+        # Logique PPV Big Data
+        remaining = set(range(1, n))
+        ordre = [0]
+        curr = 0
+        visite = np.zeros(n, dtype=bool)
+        visite[0] = True
+        for _ in range(n - 1):
+            nxt = g.plus_proche_voisin(curr, remaining) 
+            ordre.append(nxt)
+            visite[nxt] = True
+            remaining.remove(nxt)
+            curr = nxt
+        ordre.append(0)
+        route_heur = Route(g, ordre)
 
-        methode_affichee = "ppv"
+    dist_heur = route_heur.calcul_distance()
+    temps_heur = time.time() - t0
 
-    aff = Affichage(
-        g,
-        routes_population=[route_finale],
-        group_name=f"Méthode affichée automatiquement : {methode_affichee.upper()}",
-        methode=methode_affichee
+    aff = Affichage(g)
+    
+    aff.update_affichage(route_heur)
+    aff.log(f"Heuristique {methode_heuristique.upper()} : {dist_heur:.2f} (base)")
+    aff.update_best_score(dist_heur)
+    
+    optimization_thread = threading.Thread(
+        target=run_optimization, 
+        args=(g, aff, route_heur, dist_heur, temps_heur, tps_max)
     )
+
+    optimization_thread.start()
+    
     aff.mainloop()
-
-
-
-
